@@ -1,0 +1,7 @@
+{
+  "demo": {
+    "name": "Demo Company",
+    "admin_password": "admin123",
+    "user_password": "user123"
+  }
+}

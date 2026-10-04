@@ -1,0 +1,25 @@
+{
+  "kpi_var": "KPI",
+  "brand_var": "Bank",
+  "weight_var": "Weight",
+  "date_var": "Date",
+  "comment_vars": [
+    "Q1",
+    "Q1_1",
+    "Q1_2",
+    "Q1_3"
+  ],
+  "extra_vars": [
+    "Q2",
+    "Q3",
+    "Q4",
+    "Q5",
+    "Q6",
+    "Q7"
+  ],
+  "filter_vars": [
+    "Age",
+    "Bank"
+  ],
+  "_freq_label": "Год"
+}
