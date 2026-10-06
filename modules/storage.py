@@ -10,6 +10,20 @@ DATA_DIR.mkdir(exist_ok=True)
 TENANTS_PATH = DATA_DIR / "tenants.json"
 SESSION_PATH = DATA_DIR / "session.json"
 
+# ── JSON-чтение  ───────────────────────────────────────────────────
+def _load_json(path, default=None):
+    if not path.exists():
+        return default if default is not None else {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default if default is not None else {}
+
+
+def _save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ── Реестр тенантов ──────────────────────────────────────────
 
@@ -26,16 +40,11 @@ def _default_tenants():
 def load_tenants():
     if not TENANTS_PATH.exists():
         save_tenants(_default_tenants())
-    try:
-        with open(TENANTS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return _default_tenants()
+    return _load_json(TENANTS_PATH, _default_tenants())
 
 
 def save_tenants(tenants: dict):
-    with open(TENANTS_PATH, "w", encoding="utf-8") as f:
-        json.dump(tenants, f, ensure_ascii=False, indent=2)
+    _save_json(TENANTS_PATH, tenants)
 
 
 def add_tenant(tenant_id, name, admin_password, user_password):
@@ -77,21 +86,11 @@ def _files_dir(tenant_id):
 # ── Реестр файлов ────────────────────────────────────────────
 
 def get_registry(tenant_id):
-    path = _files_dir(tenant_id) / "registry.json"
-    if not path.exists():
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
+    return _load_json(_files_dir(tenant_id) / "registry.json", [])
 
 
 def save_registry(tenant_id, registry):
-    path = _files_dir(tenant_id) / "registry.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(registry, f, ensure_ascii=False, indent=2)
-
+    _save_json(_files_dir(tenant_id) / "registry.json", registry)
 
 def add_file(tenant_id, filename, df, var_labels=None, val_labels=None):
     files_dir = _files_dir(tenant_id)
@@ -154,56 +153,33 @@ def load_dataset(tenant_id):
 # ── Лейблы ───────────────────────────────────────────────────
 
 def save_var_labels(tenant_id, labels: dict):
-    path = _tenant_dir(tenant_id) / "var_labels.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(labels, f, ensure_ascii=False, indent=2)
-
+    _save_json(_tenant_dir(tenant_id) / "var_labels.json", labels)
 
 def load_var_labels(tenant_id):
-    path = _tenant_dir(tenant_id) / "var_labels.json"
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
+    return _load_json(_tenant_dir(tenant_id) / "var_labels.json")
 
 def save_value_labels(tenant_id, labels: dict):
-    path = _tenant_dir(tenant_id) / "value_labels.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(labels, f, ensure_ascii=False, indent=2)
-
+    _save_json(_tenant_dir(tenant_id) / "value_labels.json", labels)
 
 def load_value_labels(tenant_id):
-    path = _tenant_dir(tenant_id) / "value_labels.json"
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    return _load_json(_tenant_dir(tenant_id) / "value_labels.json")
 
 
 # ── Конфиг ───────────────────────────────────────────────────
 
 def save_config(tenant_id, config: dict):
-    path = _tenant_dir(tenant_id) / "config.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+    _save_json(_tenant_dir(tenant_id) / "config.json", config)
 
 
 def load_config(tenant_id):
-    path = _tenant_dir(tenant_id) / "config.json"
-    if not path.exists():
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    return _load_json(_tenant_dir(tenant_id) / "config.json")
+
+
+def is_config_ready(tenant_id):
+    cfg = load_config(tenant_id)
+    required = ["kpi_var", "brand_var", "weight_var", "date_var",
+                "comment_vars", "extra_vars", "filter_vars"]
+    return all(k in cfg for k in required)
 
 
 # ── Полный сброс ─────────────────────────────────────────────

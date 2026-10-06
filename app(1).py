@@ -2,13 +2,10 @@
 import streamlit as st
 import pandas as pd
 import os
-import traceback
 
 from modules import auth, storage, spss_loader
-from modules.blocks import block1_kpi_dynamics, block2_wordcloud, block3_multichoice, block4_competitive_map, block5_metrics_table
+from modules.blocks import block1_kpi_dynamics, block2_wordcloud, block3_multichoice, block4_competitive_map
 from modules.config import FONT_FAMILY, GRAY, FONT_PX
-from modules.analytics import fmt_brand_value, normalize_key
-from modules.ui_helpers import render_block
 
 try:
     from streamlit_user_device import user_device
@@ -52,6 +49,7 @@ if st.sidebar.button("Выйти"):
 if "uploader_counter" not in st.session_state:
     st.session_state["uploader_counter"] = 0
 
+
 # —— Загрузка данных и конфига ———————————————————————
 registry = storage.get_registry(tenant_id)
 df = storage.load_dataset(tenant_id)
@@ -61,6 +59,7 @@ val_labels = storage.load_value_labels(tenant_id)
 
 if "go_to_dashboard" not in st.session_state:
     st.session_state["go_to_dashboard"] = False
+
 
 # —— Блок управления данными (только админ) ————————————————
 if role == "admin":
@@ -180,15 +179,19 @@ if page == "Импорт/настройка" and role == "admin":
     if brand_var_cfg and brand_var_cfg in df.columns:
         unique_brands = sorted(df[brand_var_cfg].dropna().unique().tolist())
         vl_brands = val_labels.get(brand_var_cfg, {})
+        def fmt_brand_cfg(v):
+            key = str(int(v)) if isinstance(v, (int, float)) and float(v).is_integer() else str(v)
+            return vl_brands.get(key, str(v))
         brand_colors_cfg = cfg.get("brand_colors", {})
         cols = st.columns(4)
         for i, brand_val in enumerate(unique_brands):
             col = cols[i % 4]
-            label = fmt_brand_value(brand_val, vl_brands)
-            key = normalize_key(brand_val)
-            default_color = brand_colors_cfg.get(key, f"hsl({i * 60 % 360}, 70%, 50%)")
+            label = fmt_brand_cfg(brand_val)
+            key = str(int(brand_val)) if isinstance(brand_val, (int, float)) and float(brand_val).is_integer() else str(brand_val)
+            default_color = brand_colors_cfg.get(key, "hsl(" + str(i * 60 % 360) + ", 70%, 50%)")
             brand_colors_cfg[key] = col.color_picker(label, default_color, key=f"brand_color_{i}")
-        valid_keys = {normalize_key(b) for b in unique_brands}
+        # Очистка старых дубликатов (например "1.0" когда нужно "1")
+        valid_keys = {str(int(b)) if isinstance(b, (int, float)) and float(b).is_integer() else str(b) for b in unique_brands}
         brand_colors_cfg = {k: v for k, v in brand_colors_cfg.items() if k in valid_keys}
         cfg["brand_colors"] = brand_colors_cfg
 
@@ -215,6 +218,7 @@ if not config_ok:
 st.sidebar.markdown("**Периодичность**")
 freq_map = {"Неделя": "W", "Месяц": "M", "Квартал": "Q", "Год": "Y"}
 
+# Восстановление из конфига через index (фикс сброса после перелогина)
 freq_options = list(freq_map.keys())
 saved_freq_label = cfg.get("_freq_label", "Месяц")
 default_freq_idx = freq_options.index(saved_freq_label) if saved_freq_label in freq_options else 1
@@ -239,7 +243,10 @@ for var in filter_vars:
         continue
     unique_vals = sorted(df[var].dropna().unique().tolist())
     vl = val_labels.get(var, {})
-    display_options = [fmt_brand_value(v, vl) for v in unique_vals]
+    def fmt(v):
+        key = str(int(v)) if isinstance(v, (int, float)) and float(v).is_integer() else str(v)
+        return vl.get(key, str(v))
+    display_options = [fmt(v) for v in unique_vals]
     sel_idx = st.sidebar.multiselect(
         f"{var}",
         range(len(unique_vals)),
@@ -264,30 +271,91 @@ brand_colors = cfg.get("brand_colors", {})
 if brand_var and brand_var in df.columns:
     unique_brands = sorted(df[brand_var].dropna().unique().tolist())
     for i, bv in enumerate(unique_brands):
-        key = normalize_key(bv)
+        key = str(int(bv)) if isinstance(bv, (int, float)) and float(bv).is_integer() else str(bv)
         if key not in brand_colors:
-            brand_colors[key] = f"hsl({i * 60 % 360}, 70%, 50%)"
+            brand_colors[key] = "hsl(" + str(i * 60 % 360) + ", 70%, 50%)"
 
-# —— Блоки дашборда —————————————————————————————
+# —— Блок 1: Динамика KPI —————————————————————————
 kpi_label = var_labels.get(cfg.get("kpi_var", ""), cfg.get("kpi_var", ""))
+st.header(f"Динамика {kpi_label}")
+
+try:
+    block1_kpi_dynamics.render_kpi_dynamics(
+        df_filtered, cfg, freq=freq,
+        var_labels=var_labels,
+        val_labels=val_labels,
+        brand_colors=brand_colors,
+        font_px=FONT_PX,
+        is_mobile=is_mobile
+    )
+except Exception as e:
+    st.error(f"Ошибка при построении графика: {e}")
+    with st.expander("Отладка"):
+        import traceback
+        st.code(traceback.format_exc())
+
+
+# —— Блок 2: Облако слов —————————————————————————————
+st.header("Облако слов — открытые вопросы")
+
 comment_vars = cfg.get("comment_vars", [])
+if comment_vars:
+    try:
+        block2_wordcloud.render_wordcloud_block(
+            df_filtered, cfg,
+            var_labels=var_labels,
+            val_labels=val_labels,
+            brand_colors=brand_colors,
+            font_px=FONT_PX,
+            freq=freq,
+            is_mobile=is_mobile
+        )
+    except Exception as e:
+        st.error(f"Ошибка облака слов: {e}")
+        with st.expander("Отладка"):
+            import traceback
+            st.code(traceback.format_exc())
+else:
+    st.info("Облако слов недоступно — админ не выбрал открытые вопросы (comment_vars) в настройках.")
+
+# —— Блок 3: Драйверы и барьеры ——————————————————————
+st.header("Драйверы и барьеры")
+
+try:
+    block3_multichoice.render_multichoice_block(
+        df_filtered, cfg,
+        var_labels=var_labels,
+        val_labels=val_labels,
+        brand_colors=brand_colors,
+        font_px=FONT_PX,
+        freq=freq,
+        is_mobile=is_mobile
+    )
+except Exception as e:
+    st.error(f"Ошибка блока 3: {e}")
+    with st.expander("Отладка"):
+        import traceback
+        st.code(traceback.format_exc())
+
+# —— Блок 4: Конкурентная карта ——————————————————————
+st.header("Конкурентная карта")
+
 extra_vars = cfg.get("extra_vars", [])
-
-render_block(f"Динамика {kpi_label}", block1_kpi_dynamics.render_kpi_dynamics,
-             df_filtered, cfg, var_labels, val_labels, brand_colors, FONT_PX, freq, is_mobile)
-
-render_block("Облако слов — открытые вопросы", block2_wordcloud.render_wordcloud_block,
-             df_filtered, cfg, var_labels, val_labels, brand_colors, FONT_PX, freq, is_mobile,
-             enabled=bool(comment_vars),
-             disabled_msg="Облако слов недоступно — админ не выбрал открытые вопросы (comment_vars) в настройках.")
-
-render_block("Драйверы и барьеры", block3_multichoice.render_multichoice_block,
-             df_filtered, cfg, var_labels, val_labels, brand_colors, FONT_PX, freq, is_mobile)
-
-render_block("Конкурентная карта", block4_competitive_map.render_competitive_map,
-             df_filtered, cfg, var_labels, val_labels, brand_colors, FONT_PX, freq, is_mobile,
-             enabled=bool(extra_vars),
-             disabled_msg="Конкурентная карта недоступна — админ не выбрал дополнительные показатели (extra_vars) в настройках.")
-
-render_block("Динамика основных показателей", block5_metrics_table.render_metrics_table,
-             df_filtered, cfg, var_labels, val_labels, brand_colors, FONT_PX, freq, is_mobile)
+if extra_vars:
+    try:
+        block4_competitive_map.render_competitive_map(
+            df_filtered, cfg,
+            var_labels=var_labels,
+            val_labels=val_labels,
+            brand_colors=brand_colors,
+            font_px=FONT_PX,
+            freq=freq,
+            is_mobile=is_mobile
+        )
+    except Exception as e:
+        st.error(f"Ошибка блока 4: {e}")
+        with st.expander("Отладка"):
+            import traceback
+            st.code(traceback.format_exc())
+else:
+    st.info("Конкурентная карта недоступна — админ не выбрал дополнительные показатели (extra_vars) в настройках.")

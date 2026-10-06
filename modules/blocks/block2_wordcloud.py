@@ -5,6 +5,8 @@ import re
 import math
 import plotly.graph_objects as go
 
+from ..analytics import format_period, fmt_brand_value
+from ..config import FONT_FAMILY, GRAY
 
 def _get_comment_vars(df, cfg):
     """Return only string (text) variables from comment_vars."""
@@ -15,27 +17,8 @@ def _get_comment_vars(df, cfg):
             text_vars.append(var)
     return text_vars
 
-
-def _format_period(period, freq):
-    """Форматирование периода в зависимости от freq."""
-    if freq == "Y":
-        return str(period.year)
-    elif freq == "Q":
-        return f"Q{period.quarter} {str(period.year)[2:]}"
-    elif freq == "M":
-        months_ru = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн",
-                     "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]
-        return f"{months_ru[period.month - 1]} {str(period.year)[2:]}"
-    elif freq == "W":
-        return f"{period.year}-W{period.week:02d}"
-    else:
-        return str(period)
-
-
 def render_wordcloud_block(df, cfg, var_labels=None, val_labels=None,
                            brand_colors=None, font_px=16, freq="M", is_mobile=False):
-    font_family = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
-    GRAY = "#999999"
 
     text_vars = _get_comment_vars(df, cfg)
     if not text_vars:
@@ -57,11 +40,7 @@ def render_wordcloud_block(df, cfg, var_labels=None, val_labels=None,
     brand_vl = (val_labels or {}).get(brand_var, {})
     unique_brands = sorted(df[brand_var].dropna().unique().tolist())
 
-    def fmt_brand(v):
-        key = str(int(v)) if isinstance(v, (int, float)) and float(v).is_integer() else str(v)
-        return brand_vl.get(key, str(v))
-
-    brand_display = [fmt_brand(b) for b in unique_brands]
+    brand_display = [fmt_brand_value(b, brand_vl) for b in unique_brands]
     brand_map = dict(zip(brand_display, unique_brands))
     sel_brand_display = st.selectbox("Бренд", brand_display, key="wc_brand_sel")
     sel_brand = brand_map[sel_brand_display]
@@ -76,7 +55,7 @@ def render_wordcloud_block(df, cfg, var_labels=None, val_labels=None,
         if len(valid) > 0:
             periods = valid.dt.to_period(freq)
             unique_periods = sorted(periods.unique().tolist())
-            period_labels = [_format_period(p, freq) for p in unique_periods]
+            period_labels = [format_period(p, freq) for p in unique_periods]
             period_values = unique_periods
             period_label_to_val = dict(zip(period_labels, period_values))
 
@@ -241,7 +220,7 @@ def render_wordcloud_block(df, cfg, var_labels=None, val_labels=None,
         y=cloud_y,
         mode="text+markers",
         text=cloud_text,
-        textfont=dict(size=cloud_size, color=cloud_color, family=font_family),
+        textfont=dict(size=cloud_size, color=cloud_color, family=FONT_FAMILY),
         marker=dict(opacity=0, size=20),
         hoverinfo="text",
         hovertext=cloud_hover,
@@ -252,7 +231,7 @@ def render_wordcloud_block(df, cfg, var_labels=None, val_labels=None,
         yaxis=dict(visible=False, range=[-220, 220]),
         margin=dict(l=0, r=0, t=0, b=0),
         height=400,
-        font=dict(family=font_family, size=font_px, color=GRAY),
+        font=dict(family=FONT_FAMILY, size=font_px, color=GRAY),
     )
 
     event = st.plotly_chart(fig_cloud, width="stretch",

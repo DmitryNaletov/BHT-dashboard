@@ -35,3 +35,23 @@ def prepare_axes(corrs, diffs):
     x_range = calculate_x_range(corrs)
     y_range = calculate_y_range(diffs)
     return x_range, y_range
+
+# axis_utils.py
+def add_quadrant_annotation(fig, x_min, x_max, y_min, y_max, corr_mean, text, x_anchor, y_anchor, color, font_family):
+    x_pos = x_max - (x_max - corr_mean) * 0.03 if x_anchor == 'right' else x_min + (corr_mean - x_min) * 0.03
+    y_pos = y_max - (y_max - 0) * 0.05 if y_anchor == 'top' else y_min + (0 - y_min) * 0.05
+    
+    fig.add_annotation(
+        x=x_pos,
+        y=y_pos,
+        text=text,
+        showarrow=False,
+        font=dict(
+            size=12, 
+            color=f"rgba({color},0.8)", 
+            family=font_family
+        ),
+        xanchor=x_anchor,
+        yanchor=y_anchor
+    )
+

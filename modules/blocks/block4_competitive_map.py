@@ -4,31 +4,14 @@ import numpy as np
 import math
 import streamlit as st
 import plotly.graph_objects as go
-from .axis_utils import prepare_axes, to_px
+from ..analytics import format_period, weighted_mean, fmt_brand_value, weighted_corr
+from ..config import FONT_FAMILY, GRAY, FONT_PX
+
 from .label_placement import align_labels
-
-def _format_period(period, freq):
-    if freq == "Y":
-        return str(period.year)
-    elif freq == "Q":
-        return f"Q{period.quarter} {str(period.year)[2:]}"
-    elif freq == "M":
-        months_ru = ["\u042f\u043d\u0432", "\u0424\u0435\u0432", "\u041c\u0430\u0440",
-                     "\u0410\u043f\u0440", "\u041c\u0430\u0439", "\u0418\u044e\u043d",
-                     "\u0418\u044e\u043b", "\u0410\u0432\u0433", "\u0421\u0435\u043d",
-                     "\u041e\u043a\u0442", "\u041d\u043e\u044f", "\u0414\u0435\u043a"]
-        return f"{months_ru[period.month - 1]} {str(period.year)[2:]}"
-    elif freq == "W":
-        return f"{period.year}-W{period.week:02d}"
-    else:
-        return str(period)
-
-
+from .axis_utils import prepare_axes, to_px, add_quadrant_annotation
 
 def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
                            brand_colors=None, font_px=16, freq="M", is_mobile=False):
-    font_family = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
-    GRAY = "#999999"
 
     brand_var = cfg.get("brand_var")
     kpi_var = cfg.get("kpi_var")
@@ -49,11 +32,8 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
     brand_vl = (val_labels or {}).get(brand_var, {})
     unique_brands = sorted(df[brand_var].dropna().unique().tolist())
 
-    def fmt_brand(v):
-        key = str(int(v)) if isinstance(v, (int, float)) and float(v).is_integer() else str(v)
-        return brand_vl.get(key, str(v))
 
-    brand_display = [fmt_brand(b) for b in unique_brands]
+    brand_display = [fmt_brand_value(b, brand_vl) for b in unique_brands]
     brand_map = dict(zip(brand_display, unique_brands))
     sel_brand_display = st.selectbox("\u0411\u0440\u0435\u043d\u0434", brand_display, key="cm_brand_sel")
     sel_brand = brand_map[sel_brand_display]
@@ -66,7 +46,7 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
         if len(valid) > 0:
             periods = valid.dt.to_period(freq)
             unique_periods = sorted(periods.unique().tolist())
-            period_labels = [_format_period(p, freq) for p in unique_periods]
+            period_labels = [format_period(p, freq) for p in unique_periods]
             period_values = unique_periods
             period_label_to_val = dict(zip(period_labels, period_values))
 
@@ -94,34 +74,16 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
     # —— Вычисления ——
     w_all = df[weight_var] if weight_var and weight_var in df.columns else None
 
-    def weighted_corr(x, y, w):
-        mask = x.notna() & y.notna()
-        if w is not None:
-            mask = mask & w.notna()
-        x_v = x[mask].values
-        y_v = y[mask].values
-        w_v = w[mask].values if w is not None else np.ones(len(x_v))
-        if len(x_v) < 3:
+    def safe_weighted_mean(series, w, idx):
+        """Взвешенное среднее с согласованными весами."""
+        if w is None:
+            return float(series.mean()) if len(series) > 0 else np.nan
+        w_sub = w.loc[idx]
+        sub = series.loc[idx]
+        mask = sub.notna() & w_sub.notna()
+        if mask.sum() == 0:
             return np.nan
-        w_v = w_v / w_v.sum()
-        x_m = np.average(x_v, weights=w_v)
-        y_m = np.average(y_v, weights=w_v)
-        cov = np.average((x_v - x_m) * (y_v - y_m), weights=w_v)
-        x_std = np.sqrt(np.average((x_v - x_m) ** 2, weights=w_v))
-        y_std = np.sqrt(np.average((y_v - y_m) ** 2, weights=w_v))
-        if x_std == 0 or y_std == 0:
-            return np.nan
-        return float(cov / (x_std * y_std))
-
-    def weighted_mean(x, w):
-        mask = x.notna()
-        if w is not None:
-            mask = mask & w.notna()
-        x_v = x[mask].values
-        w_v = w[mask].values if w is not None else np.ones(len(x_v))
-        if len(x_v) == 0:
-            return np.nan
-        return float(np.average(x_v, weights=w_v))
+        return weighted_mean(sub[mask], w_sub[mask])
 
     kpi = df[kpi_var]
     df_sel = df[df[brand_var] == sel_brand]
@@ -136,7 +98,7 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
         if np.isnan(corr):
             continue
 
-        mean_sel = weighted_mean(df_sel[var], w_all)
+        mean_sel = safe_weighted_mean(df_sel[var], w_all, df_sel.index)
 
         best_mean = -np.inf
         best_brand = None
@@ -144,7 +106,7 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
             if bv == sel_brand:
                 continue
             df_bv = df[df[brand_var] == bv]
-            m = weighted_mean(df_bv[var], w_all)
+            m = safe_weighted_mean(df_bv[var], w_all, df_bv.index)
             if not np.isnan(m) and m > best_mean:
                 best_mean = m
                 best_brand = bv
@@ -175,8 +137,6 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
 
     corr_mean = float(np.nanmean(corrs))
 
-
-
     # —— Размещение меток ——
     label_list = [p["label"] for p in points_data]
     
@@ -195,6 +155,31 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
         dtick = 0.2
     else:
         dtick = 0.5
+
+    # —— Построение графика ——
+    fig = go.Figure()
+
+    # Далее используем dtick в настройках оси
+    fig.update_layout(
+        xaxis=dict(
+            title="Корреляция с KPI",
+            range=[x_min, x_max],
+            tickformat=".2f",
+            dtick=dtick,  # Теперь переменная определена
+            gridcolor="rgba(0,0,0,0.05)",
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title="\u0420\u0430\u0437\u043d\u0438\u0446\u0430 \u0441\u0440\u0435\u0434\u043d\u0438\u0445 (\u0431\u0440\u0435\u043d\u0434 \u2212 \u043b\u0438\u0434\u0435\u0440)",
+            range=[y_min, y_max],
+            gridcolor="rgba(0,0,0,0.05)",
+            zeroline=False,
+        ),
+        height=600,
+        margin=dict(l=60, r=30, t=30, b=60),
+        font=dict(family=FONT_FAMILY, size=font_px, color="#333333"),
+        plot_bgcolor="white",
+    )
         
     # Затем вычисляем смещения меток
     label_offsets = align_labels(
@@ -203,8 +188,6 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
         plot_w=600, plot_h=600, point_size=20, label_gap=10  # Добавить параметры размера графика
     )
 
-    # —— Построение графика ——
-    fig = go.Figure()
 
     # Квадранты
     fig.add_shape(type="rect", xref="x", yref="y",
@@ -233,9 +216,9 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
     y_below = [p["diff"] for p in points_data if p["diff"] <= 0]
     colors_below = [p["leader_color"] for p in points_data if p["diff"] <= 0]
 
-    hover_above = [f"<b>{p['label']}</b><br>\u041a\u043e\u0440\u0440\u0435\u043b\u044f\u0446\u0438\u044f: {p['corr']:.3f}<br>\u0420\u0430\u0437\u043d\u0438\u0446\u0430: {p['diff']:+.3f}<br>\u0411\u0440\u0435\u043d\u0434: {fmt_brand(sel_brand)}"
+    hover_above = [f"<b>{p['label']}</b><br>\u041a\u043e\u0440\u0440\u0435\u043b\u044f\u0446\u0438\u044f: {p['corr']:.3f}<br>\u0420\u0430\u0437\u043d\u0438\u0446\u0430: {p['diff']:+.3f}<br>\u0411\u0440\u0435\u043d\u0434: {fmt_brand_value(sel_brand,brand_vl)}"
                    for p in points_data if p["diff"] > 0]
-    hover_below = [f"<b>{p['label']}</b><br>\u041a\u043e\u0440\u0440\u0435\u043b\u044f\u0446\u0438\u044f: {p['corr']:.3f}<br>\u0420\u0430\u0437\u043d\u0438\u0446\u0430: {p['diff']:+.3f}<br>\u041b\u0438\u0434\u0435\u0440: {fmt_brand(p['leader_brand'])}"
+    hover_below = [f"<b>{p['label']}</b><br>\u041a\u043e\u0440\u0440\u0435\u043b\u044f\u0446\u0438\u044f: {p['corr']:.3f}<br>\u0420\u0430\u0437\u043d\u0438\u0446\u0430: {p['diff']:+.3f}<br>\u041b\u0438\u0434\u0435\u0440: {fmt_brand_value(p['leader_brand'],brand_vl)}"
                    for p in points_data if p["diff"] <= 0]
 
     fig.add_trace(go.Scatter(
@@ -266,70 +249,28 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
             arrowhead=0,
             arrowwidth=0.5,
             arrowcolor="rgba(150,150,150,0.6)",
-            font=dict(size=11, family=font_family, color="#333333"),
+            font=dict(size=11, family=FONT_FAMILY, color="#333333"),
             bgcolor="rgba(255,255,255,0)",
             borderpad=0,
             standoff=2,
         )
 
     # Подписи квадрантов — прижаты к углам
-    fig.add_annotation(
-        x=x_max - (x_max - corr_mean) * 0.03,
-        y=y_max - (y_max - 0) * 0.05,
-        text="\u0421\u0438\u043b\u044c\u043d\u044b\u0435 \u0441\u0442\u043e\u0440\u043e\u043d\u044b",
-        showarrow=False,
-        font=dict(size=12, color="rgba(76,175,80,0.8)", family=font_family),
-        xanchor="right",
-        yanchor="top",
+    add_quadrant_annotation(
+        fig, x_min, x_max, y_min, y_max, corr_mean,
+        text="Сильные стороны", x_anchor="right", y_anchor="top", color="76,175,80", font_family=FONT_FAMILY
     )
-    fig.add_annotation(
-        x=x_max - (x_max - corr_mean) * 0.03,
-        y=y_min + (0 - y_min) * 0.05,
-        text="\u0423\u0433\u0440\u043e\u0437\u044b",
-        showarrow=False,
-        font=dict(size=12, color="rgba(244,67,54,0.8)", family=font_family),
-        xanchor="right",
-        yanchor="bottom",
+    add_quadrant_annotation(
+        fig, x_min, x_max, y_min, y_max, corr_mean,
+        text="Угрозы", x_anchor="right", y_anchor="bottom", color="244,67,54", font_family=FONT_FAMILY
     )
-    fig.add_annotation(
-        x=x_min + (corr_mean - x_min) * 0.03,
-        y=y_max - (y_max - 0) * 0.05,
-        text="\u041d\u0438\u0448\u0435\u0432\u044b\u0435 \u043f\u0440\u0435\u0438\u043c\u0443\u0449\u0435\u0441\u0442\u0432\u0430",
-        showarrow=False,
-        font=dict(size=12, color="rgba(33,150,243,0.8)", family=font_family),
-        xanchor="left",
-        yanchor="top",
+    add_quadrant_annotation(
+        fig, x_min, x_max, y_min, y_max, corr_mean,
+        text="Слабые преимущества", x_anchor="left", y_anchor="top", color="33,150,243", font_family=FONT_FAMILY
     )
-    fig.add_annotation(
-        x=x_min + (corr_mean - x_min) * 0.03,
-        y=y_min + (0 - y_min) * 0.05,
-        text="\u041d\u0438\u0437\u043a\u0438\u0439 \u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442",
-        showarrow=False,
-        font=dict(size=12, color="rgba(158,158,158,0.8)", family=font_family),
-        xanchor="left",
-        yanchor="bottom",
-    )
-
-    # Далее используем dtick в настройках оси
-    fig.update_layout(
-        xaxis=dict(
-        title="Корреляция с KPI",
-        range=[x_min, x_max],
-        tickformat=".2f",
-        dtick=dtick,  # Теперь переменная определена
-        gridcolor="rgba(0,0,0,0.05)",
-        zeroline=False,
-        ),
-        yaxis=dict(
-            title="\u0420\u0430\u0437\u043d\u0438\u0446\u0430 \u0441\u0440\u0435\u0434\u043d\u0438\u0445 (\u0431\u0440\u0435\u043d\u0434 \u2212 \u043b\u0438\u0434\u0435\u0440)",
-            range=[y_min, y_max],
-            gridcolor="rgba(0,0,0,0.05)",
-            zeroline=False,
-        ),
-        height=600,
-        margin=dict(l=60, r=30, t=30, b=60),
-        font=dict(family=font_family, size=font_px, color="#333333"),
-        plot_bgcolor="white",
+    add_quadrant_annotation(
+        fig, x_min, x_max, y_min, y_max, corr_mean,
+        text="Нижайший приоритет", x_anchor="left", y_anchor="bottom", color="158,158,158", font_family=FONT_FAMILY
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -344,7 +285,7 @@ def render_competitive_map(df, cfg, var_labels=None, val_labels=None,
                 "\u0421\u0440\u0435\u0434\u043d\u0435\u0435 (\u0431\u0440\u0435\u043d\u0434)": round(p["mean_sel"], 3),
                 "\u0421\u0440\u0435\u0434\u043d\u0435\u0435 (\u043b\u0438\u0434\u0435\u0440)": round(p["mean_leader"], 3),
                 "\u0420\u0430\u0437\u043d\u0438\u0446\u0430": round(p["diff"], 3),
-                "\u041b\u0438\u0434\u0435\u0440": fmt_brand(p["leader_brand"]),
+                "\u041b\u0438\u0434\u0435\u0440": fmt_brand_value(p["leader_brand"],brand_vl),
             })
         st.dataframe(pd.DataFrame(table_data), use_container_width=True, hide_index=True)
 

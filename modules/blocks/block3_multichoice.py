@@ -8,6 +8,7 @@ import re
 import math
 from collections import OrderedDict
 
+from ..config import FONT_FAMILY, GRAY, FONT_PX
 
 def _brand_key(v):
     """Нормализованный ключ бренда: 1.0 -> '1', 2.0 -> '2', 'abc' -> 'abc'."""

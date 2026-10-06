@@ -1,13 +1,6 @@
 import pyreadstat
 import pandas as pd
-
-
-def _normalize_key(k):
-    """Приводит код значения к единому строковому формату."""
-    if isinstance(k, (int, float)) and float(k).is_integer():
-        return str(int(k))
-    return str(k)
-
+from .analytics import normalize_key  
 
 def read_sav_with_labels(path):
     df, meta = pyreadstat.read_sav(path)
@@ -28,13 +21,13 @@ def read_sav_with_labels(path):
         for var_name, label_set_name in v2l.items():
             if label_set_name in vl:
                 value_labels[var_name] = {
-                    _normalize_key(k): v for k, v in vl[label_set_name].items()
+                    normalize_key(k): v for k, v in vl[label_set_name].items()
                 }
     elif hasattr(meta, "value_labels"):
         raw = meta.value_labels or {}
         for key, mapping in raw.items():
             value_labels[key] = {
-                _normalize_key(k): v for k, v in mapping.items()
+                normalize_key(k): v for k, v in mapping.items()
             }
 
     return df, variable_labels, value_labels

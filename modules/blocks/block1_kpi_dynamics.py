@@ -4,10 +4,10 @@ import numpy as np
 import math
 import streamlit as st
 
+from ..config import FONT_FAMILY, GRAY, FONT_PX
 from ..analytics import (
     format_period, t_test_vs_overall, weighted_mean, weighted_std, fmt_brand_value,
 )
-
 
 def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, is_mobile):
     kpi_var = cfg["kpi_var"]
@@ -16,7 +16,6 @@ def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, i
     date_var = cfg["date_var"]
 
     vl = val_labels or {}
-    font_family = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
 
     df_work = df[[kpi_var, brand_var, weight_var, date_var]].copy()
     df_work = df_work.dropna(subset=[kpi_var, brand_var, date_var])
@@ -97,6 +96,15 @@ def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, i
 
     fig = go.Figure()
 
+    # ВАЖНО: отключаем автомасштабирование текста. 
+    # uniformtext_minsize=12 — минимальный размер, который Plotly не будет уменьшать.
+    # uniformtext_mode='hide' — если текст не влезает, он скроется (лучше, чем становиться микроскопическим).
+    # Если хотите, чтобы текст всегда был виден даже ценой наложения, используйте mode='show'
+    fig.update_layout(
+        uniformtext_minsize=12, 
+        uniformtext_mode='show',  # Или 'hide', если наезжание совсем недопустимо
+    )
+
     for i, brand_val in enumerate(unique_brands):
         brand_key = str(int(brand_val)) if isinstance(brand_val, (int, float)) and float(brand_val).is_integer() else str(brand_val)
         brand_name = brand_names[i]
@@ -119,6 +127,8 @@ def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, i
             else:
                 text_vals.append("{:.2f}".format(v))
 
+        safe_font_size = max(int(font_px), 12)
+
         fig.add_trace(go.Bar(
             x=x_labels,
             y=y_vals,
@@ -127,7 +137,8 @@ def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, i
             text=text_vals,
             textposition="outside",
             textangle=270 if vertical_text else 0,
-            textfont=dict(size=font_px, color="#999999", family=font_family),
+            # Единый размер для всех меток — это работает в Plotly
+            textfont=dict(size=safe_font_size, color=GRAY, family=FONT_FAMILY),
             hovertemplate=brand_name + "<br>%{x}: %{y:.2f}<extra></extra>",
         ))
 
@@ -157,14 +168,14 @@ def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, i
 
     fig.update_layout(
         barmode="group",
-        font=dict(family=font_family, size=font_px, color="black"),
+        font=dict(family=FONT_FAMILY, size=font_px, color=GRAY),
         title=None,
         xaxis=dict(
             tickangle=270 if vertical_text else 0,
-            tickfont=dict(size=font_px, family=font_family),
+            tickfont=dict(size=font_px, family=FONT_FAMILY),
         ),
         yaxis=dict(
-            tickfont=dict(size=font_px, family=font_family),
+            tickfont=dict(size=font_px, family=FONT_FAMILY),
             title=None,
         ),
         legend=dict(
@@ -173,7 +184,7 @@ def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, i
             y=legend_y,
             xanchor="center",
             x=0.5,
-            font=dict(size=font_px, family=font_family),
+            font=dict(size=font_px, family=FONT_FAMILY),
         ),
         margin=dict(l=0, r=0, t=t_margin, b=b_margin),
         bargap=0.3,

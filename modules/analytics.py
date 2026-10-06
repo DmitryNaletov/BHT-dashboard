@@ -14,6 +14,25 @@ def weighted_std(series, weights):
     var = np.average((series - m) ** 2, weights=weights)
     return np.sqrt(var)
 
+def weighted_corr(x, y, w):
+    mask = x.notna() & y.notna()
+    if w is not None:
+        mask = mask & w.notna()
+    x_v = x[mask].values
+    y_v = y[mask].values
+    w_v = w[mask].values if w is not None else np.ones(len(x_v))
+    if len(x_v) < 3:
+        return np.nan
+    w_v = w_v / w_v.sum()
+    x_m = np.average(x_v, weights=w_v)
+    y_m = np.average(y_v, weights=w_v)
+    cov = np.sum(w_v * (x_v - x_m) * (y_v - y_m))
+    var_x = np.sum(w_v * (x_v - x_m) ** 2)
+    var_y = np.sum(w_v * (y_v - y_m) ** 2)
+    if var_x == 0 or var_y == 0:
+        return np.nan
+    return cov / np.sqrt(var_x * var_y)
+
 
 # ── T-тест Уэлча ───────────────────────────────────────────
 
@@ -103,6 +122,10 @@ def fmt_brand_value(v, val_labels):
     key = str(int(v)) if isinstance(v, (int, float)) and float(v).is_integer() else str(v)
     return val_labels.get(key, str(v))
 
+def normalize_key(v):
+    if isinstance(v, (int, float)) and float(v).is_integer():
+        return str(int(v))
+    return str(v)
 
 # ── Фильтрация числовых переменных ─────────────────────────
 
