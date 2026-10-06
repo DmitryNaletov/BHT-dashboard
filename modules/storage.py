@@ -1,7 +1,9 @@
+# -*- coding: utf-8 -*-
 import os
 import pandas as pd
 import json
 import pickle
+import streamlit as st
 from pathlib import Path
 
 DATA_DIR = Path("data")
@@ -31,13 +33,19 @@ def _default_tenants():
     return {
         "demo": {
             "name": "Demo Company",
-            "admin_password": "admin123",
-            "user_password": "user123"
+            "admin_password": st.secrets.get("DEMO_ADMIN_PASSWORD", ""),
+            "user_password": st.secrets.get("DEMO_USER_PASSWORD", ""),
         }
     }
 
 
 def load_tenants():
+    # Сначала проверяем secrets — это постоянное хранилище
+    secrets_tenants = st.secrets.get("tenants", {})
+    if secrets_tenants:
+        return dict(secrets_tenants)
+
+    # Если в secrets нет — берём из файла (для локальной разработки)
     if not TENANTS_PATH.exists():
         save_tenants(_default_tenants())
     return _load_json(TENANTS_PATH, _default_tenants())

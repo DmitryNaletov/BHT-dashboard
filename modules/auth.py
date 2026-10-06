@@ -1,10 +1,11 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import json
 import os
 from pathlib import Path
 from modules import storage
 
-SUPER_ADMIN_PASSWORD = "super123"
+SUPER_ADMIN_PASSWORD = st.secrets.get("SUPER_ADMIN_PASSWORD", "")
 
 SESSION_PATH = Path("data") / "session.json"
 
