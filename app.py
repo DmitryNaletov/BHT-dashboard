@@ -6,6 +6,7 @@ import traceback
 
 from modules import auth, storage, spss_loader
 from modules.blocks import block1_kpi_dynamics, block2_wordcloud, block3_multichoice, block4_competitive_map, block5_metrics_table
+
 from modules.config import FONT_FAMILY, GRAY, FONT_PX
 from modules.analytics import fmt_brand_value, normalize_key
 from modules.ui_helpers import render_block
@@ -107,7 +108,7 @@ if df is None:
 
 # —— Проверка конфига ———————————————————————————
 required_keys = ["kpi_var", "brand_var", "weight_var", "date_var"]
-config_ok = all(k in cfg and cfg[k] for k in required_keys)
+config_ok = all(k in cfg and cfg[k] and cfg[k] in df.columns for k in required_keys)
 
 # —— Навигация ————————————————————————————————
 if role == "admin":
@@ -133,7 +134,7 @@ if page == "Импорт/настройка" and role == "admin":
     st.write(f"**Записей:** {len(df):,} | **Переменных:** {len(df.columns)}")
 
     with st.expander("Превью данных (первые 5 строк)"):
-        st.dataframe(df.head(), width="stretch")
+        st.dataframe(df.head(), use_container_width=True)
 
     vars_list = df.columns.tolist()
 
@@ -186,7 +187,13 @@ if page == "Импорт/настройка" and role == "admin":
             col = cols[i % 4]
             label = fmt_brand_value(brand_val, vl_brands)
             key = normalize_key(brand_val)
-            default_color = brand_colors_cfg.get(key, f"hsl({i * 60 % 360}, 70%, 50%)")
+            _DEFAULT_COLORS = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+            "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
+            "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5",
+        ]
+            default_color = brand_colors_cfg.get(key, _DEFAULT_COLORS[i % len(_DEFAULT_COLORS)])
             brand_colors_cfg[key] = col.color_picker(label, default_color, key=f"brand_color_{i}")
         valid_keys = {normalize_key(b) for b in unique_brands}
         brand_colors_cfg = {k: v for k, v in brand_colors_cfg.items() if k in valid_keys}
@@ -266,7 +273,13 @@ if brand_var and brand_var in df.columns:
     for i, bv in enumerate(unique_brands):
         key = normalize_key(bv)
         if key not in brand_colors:
-            brand_colors[key] = f"hsl({i * 60 % 360}, 70%, 50%)"
+            _DEFAULT_COLORS = [
+            "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+            "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+            "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5",
+            "#c49c94", "#f7b6d2", "#c7c7c7", "#dbdb8d", "#9edae5",
+        ]
+            brand_colors[key] = _DEFAULT_COLORS[i % len(_DEFAULT_COLORS)]
 
 # —— Блоки дашборда —————————————————————————————
 kpi_label = var_labels.get(cfg.get("kpi_var", ""), cfg.get("kpi_var", ""))
@@ -289,5 +302,5 @@ render_block("Конкурентная карта", block4_competitive_map.rende
              enabled=bool(extra_vars),
              disabled_msg="Конкурентная карта недоступна — админ не выбрал дополнительные показатели (extra_vars) в настройках.")
 
-render_block("Динамика основных показателей", block5_metrics_table.render_metrics_table,
+render_block("Динамика основных показателей", block5_metrics_table.render_metrics_table, 
              df_filtered, cfg, var_labels, val_labels, brand_colors, FONT_PX, freq, is_mobile)

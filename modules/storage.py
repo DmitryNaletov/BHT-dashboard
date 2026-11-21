@@ -5,6 +5,7 @@ import json
 import pickle
 import streamlit as st
 from pathlib import Path
+from collections.abc import Mapping
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(exist_ok=True)
@@ -22,13 +23,19 @@ def _load_json(path, default=None):
     except Exception:
         return default if default is not None else {}
 
+def _to_plain(obj):
+    """Рекурсивно конвертирует AttrDict и др. Mapping-подклассы в plain dict/list."""
+    if isinstance(obj, Mapping):
+        return {k: _to_plain(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_to_plain(v) for v in obj]
+    return obj
 
 def _save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(_to_plain(data), f, ensure_ascii=False, indent=2)
 
 # ── Реестр тенантов ──────────────────────────────────────────
-
 def _default_tenants():
     return {
         "demo": {
@@ -38,22 +45,23 @@ def _default_tenants():
         }
     }
 
-
 def load_tenants():
-    # Сначала проверяем secrets — это постоянное хранилище
+    # Базовые тенанты из secrets (если есть)
     secrets_tenants = st.secrets.get("tenants", {})
-    if secrets_tenants:
-        return dict(secrets_tenants)
+    base = _to_plain(dict(secrets_tenants)) if secrets_tenants else {}
 
-    # Если в secrets нет — берём из файла (для локальной разработки)
-    if not TENANTS_PATH.exists():
+    # Дополнить/переопределить из файла
+    if TENANTS_PATH.exists():
+        file_tenants = _load_json(TENANTS_PATH, {})
+        base.update(file_tenants)
+    elif not base:
         save_tenants(_default_tenants())
-    return _load_json(TENANTS_PATH, _default_tenants())
+        base = _default_tenants()
 
+    return base
 
 def save_tenants(tenants: dict):
     _save_json(TENANTS_PATH, tenants)
-
 
 def add_tenant(tenant_id, name, admin_password, user_password):
     tenants = load_tenants()
@@ -63,7 +71,6 @@ def add_tenant(tenant_id, name, admin_password, user_password):
         "user_password": user_password
     }
     save_tenants(tenants)
-
 
 def remove_tenant(tenant_id):
     tenants = load_tenants()
@@ -76,26 +83,20 @@ def remove_tenant(tenant_id):
         import shutil
         shutil.rmtree(tenant_dir)
 
-
 # ── Пути для конкретного тенанта ──────────────────────────────
-
 def _tenant_dir(tenant_id):
     d = DATA_DIR / tenant_id
     d.mkdir(parents=True, exist_ok=True)
     return d
-
 
 def _files_dir(tenant_id):
     d = _tenant_dir(tenant_id) / "files"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
-
 # ── Реестр файлов ────────────────────────────────────────────
-
 def get_registry(tenant_id):
     return _load_json(_files_dir(tenant_id) / "registry.json", [])
-
 
 def save_registry(tenant_id, registry):
     _save_json(_files_dir(tenant_id) / "registry.json", registry)
@@ -128,7 +129,6 @@ def add_file(tenant_id, filename, df, var_labels=None, val_labels=None):
         existing.update(val_labels)
         save_value_labels(tenant_id, existing)
 
-
 def remove_file(tenant_id, filename):
     registry = get_registry(tenant_id)
     entry = next((r for r in registry if r["filename"] == filename), None)
@@ -138,7 +138,6 @@ def remove_file(tenant_id, filename):
             os.remove(file_path)
         registry = [r for r in registry if r["filename"] != filename]
         save_registry(tenant_id, registry)
-
 
 def load_dataset(tenant_id):
     registry = get_registry(tenant_id)
@@ -157,9 +156,7 @@ def load_dataset(tenant_id):
         return None
     return pd.concat(dfs, ignore_index=True)
 
-
 # ── Лейблы ───────────────────────────────────────────────────
-
 def save_var_labels(tenant_id, labels: dict):
     _save_json(_tenant_dir(tenant_id) / "var_labels.json", labels)
 
@@ -172,16 +169,12 @@ def save_value_labels(tenant_id, labels: dict):
 def load_value_labels(tenant_id):
     return _load_json(_tenant_dir(tenant_id) / "value_labels.json")
 
-
 # ── Конфиг ───────────────────────────────────────────────────
-
 def save_config(tenant_id, config: dict):
     _save_json(_tenant_dir(tenant_id) / "config.json", config)
 
-
 def load_config(tenant_id):
     return _load_json(_tenant_dir(tenant_id) / "config.json")
-
 
 def is_config_ready(tenant_id):
     cfg = load_config(tenant_id)
@@ -189,9 +182,7 @@ def is_config_ready(tenant_id):
                 "comment_vars", "extra_vars", "filter_vars"]
     return all(k in cfg for k in required)
 
-
 # ── Полный сброс ─────────────────────────────────────────────
-
 def reset_all(tenant_id):
     import shutil
     tenant_dir = _tenant_dir(tenant_id)

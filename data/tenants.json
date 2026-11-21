@@ -3,5 +3,10 @@
     "name": "Demo Company",
     "admin_password": "admin123",
     "user_password": "user123"
+  },
+  "Demo2": {
+    "name": "Demo Company 2",
+    "admin_password": "admin123",
+    "user_password": "user123"
   }
 }

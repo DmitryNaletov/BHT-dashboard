@@ -1,353 +1,678 @@
+# modules/blocks/block5_metrics_table.py
 # -*- coding: utf-8 -*-
-import pandas as pd
+
+import html
 import numpy as np
-import math
-import streamlit as st
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import pandas as pd
 
-from ..config import FONT_FAMILY, GRAY, FONT_PX
-from ..analytics import (
-    format_period, t_test_vs_overall, weighted_mean, weighted_std, fmt_brand_value,
+from .utils.sparkline import (
+    generate_sparkline_svg,
+    clean_sparkline_data,
 )
+from .block5_compute import normalize_key
+from ..analytics import fmt_brand_value
 
-
-def _normalize_key(v):
-    if isinstance(v, (int, float)) and float(v).is_integer():
-        return str(int(v))
-    return str(v)
-
-
-def _compute_metric_series(df_work, metric_var, brand_var, brand_val, all_periods, weight_var):
-    """Возвращает список взвешенных средних по периодам для одного бренда и показателя."""
-    mask = df_work[brand_var] == brand_val
-    df_brand = df_work[mask]
-    series = []
-    for period in all_periods:
-        df_p = df_brand[df_brand["_period"] == period]
-        if len(df_p) > 0:
-            w = df_p[weight_var].fillna(1).values
-            v = df_p[metric_var].values
-            series.append(np.average(v, weights=w) if w.sum() > 0 else np.nan)
-        else:
-            series.append(np.nan)
-    return series
-
-
-def _compute_significance(df_work, metric_var, brand_var, weight_var, all_periods):
-    """Значимость между брендами в последнем периоде: бренд vs остальные (t-тест Уэлча).
-    Возвращает dict: brand_key -> (direction|None, color).
-    Цвет используется для значения последнего периода.
+def render_metrics_table(
+    df: pd.DataFrame,
+    cfg: dict,
+    var_labels: dict,
+    val_labels: dict,
+    brand_colors: dict,
+    font_px: int,
+    freq: str,
+    is_mobile: bool,
+) -> str:
     """
-    sig = {}
-    last_period = all_periods[-1]
-    df_last = df_work[df_work["_period"] == last_period]
-    unique_brands = sorted(df_last[brand_var].unique().tolist())
-
-    for brand_val in unique_brands:
-        key = _normalize_key(brand_val)
-        mask_b = df_last[brand_var] == brand_val
-        df_b = df_last[mask_b]
-        df_o = df_last[~mask_b]
-
-        if len(df_b) < 2 or len(df_o) < 2:
-            sig[key] = (None, "#999999")
-            continue
-
-        w_b = df_b[weight_var].fillna(1).values
-        v_b = df_b[metric_var].values
-        w_o = df_o[weight_var].fillna(1).values
-        v_o = df_o[metric_var].values
-
-        if w_b.sum() == 0 or w_o.sum() == 0:
-            sig[key] = (None, "#999999")
-            continue
-
-        m1 = np.average(v_b, weights=w_b)
-        m2 = np.average(v_o, weights=w_o)
-        s1 = weighted_std(v_b, w_b)
-        s2 = weighted_std(v_o, w_o)
-        n1 = len(df_b)
-        n2 = len(df_o)
-
-        is_sig, direction, _ = t_test_vs_overall(m1, s1, n1, m2, s2, n2)
-        if is_sig and direction == "up":
-            sig[key] = ("up", "green")
-        elif is_sig and direction == "down":
-            sig[key] = ("down", "red")
-        else:
-            sig[key] = (None, "#999999")
-
-    return sig
-
-
-def _compute_dynamics_significance(df_work, metric_var, brand_var, weight_var, all_periods):
-    """Значимость динамики: последний период vs предпоследний (t-тест Уэлча).
-    Возвращает dict: brand_key -> (direction|None).
-    direction: "up" (значимый рост), "down" (значимое падение), None (незначимо).
-    Используется для стрелки ▲▼.
+    Формирует HTML-таблицу динамики основных показателей.
     """
-    sig = {}
-    unique_brands = sorted(df_work[brand_var].unique().tolist())
 
-    if len(all_periods) < 2:
-        for brand_val in unique_brands:
-            sig[_normalize_key(brand_val)] = None
-        return sig
+    if df is None or df.empty:
+        return '<div class="metrics-empty">Нет данных для отображения</div>'
 
-    last_period = all_periods[-1]
-    prev_period = all_periods[-2]
+    brand_var = cfg.get("brand_var")
+    date_var = cfg.get("date_var")
+    weight_var = cfg.get("weight_var")
 
-    df_last = df_work[df_work["_period"] == last_period]
-    df_prev = df_work[df_work["_period"] == prev_period]
+    if not brand_var or brand_var not in df.columns:
+        raise KeyError(
+            f"Переменная бренда '{brand_var}' отсутствует в данных"
+        )
 
-    for brand_val in unique_brands:
-        key = _normalize_key(brand_val)
+    if not date_var or date_var not in df.columns:
+        raise KeyError(
+            f"Переменная даты '{date_var}' отсутствует в данных"
+        )
 
-        df_b_last = df_last[df_last[brand_var] == brand_val]
-        df_b_prev = df_prev[df_prev[brand_var] == brand_val]
-
-        if len(df_b_last) < 2 or len(df_b_prev) < 2:
-            sig[key] = None
-            continue
-
-        w_last = df_b_last[weight_var].fillna(1).values
-        v_last = df_b_last[metric_var].values
-        w_prev = df_b_prev[weight_var].fillna(1).values
-        v_prev = df_b_prev[metric_var].values
-
-        if w_last.sum() == 0 or w_prev.sum() == 0:
-            sig[key] = None
-            continue
-
-        m_last = np.average(v_last, weights=w_last)
-        m_prev = np.average(v_prev, weights=w_prev)
-        s_last = weighted_std(v_last, w_last)
-        s_prev = weighted_std(v_prev, w_prev)
-        n_last = len(df_b_last)
-        n_prev = len(df_b_prev)
-
-        is_sig, direction, _ = t_test_vs_overall(m_last, s_last, n_last, m_prev, s_prev, n_prev)
-        if is_sig and direction == "up":
-            sig[key] = "up"
-        elif is_sig and direction == "down":
-            sig[key] = "down"
-        else:
-            sig[key] = None
-
-    return sig
-
-
-def render_metrics_table(df, cfg, var_labels=None, val_labels=None,
-                         brand_colors=None, font_px=16, freq="M", is_mobile=False):
+    # Формируем список метрик.
+    # Нельзя использовать все var_labels:
+    # туда входят бренд, дата, вес и прочие служебные переменные.
+    metric_vars = []
 
     kpi_var = cfg.get("kpi_var")
-    brand_var = cfg.get("brand_var")
-    weight_var = cfg.get("weight_var")
-    date_var = cfg.get("date_var")
-    extra_vars = cfg.get("extra_vars", [])
+    if kpi_var and kpi_var in df.columns:
+        metric_vars.append(kpi_var)
 
-    if not all([kpi_var, brand_var, weight_var, date_var]):
-        st.info("Не настроены ключевые переменные (KPI, бренд, вес, дата).")
-        return
+    for metric_var in cfg.get("extra_vars", []):
+        if metric_var in df.columns and metric_var not in metric_vars:
+            metric_vars.append(metric_var)
 
-    vl = var_labels or {}
-    vl_all = val_labels or {}
-    brand_vl = vl_all.get(brand_var, {})
+    if not metric_vars:
+        return """
+        <div class="metrics-empty">
+            Не выбраны показатели для отображения.
+            Настройте KPI или дополнительные показатели.
+        </div>
+        """
 
-    # —— Список показателей ——
-    metric_vars = [kpi_var] + [v for v in extra_vars if v in df.columns]
-    metric_labels = [vl.get(v, v) for v in metric_vars]
+    work_df = df.copy()
 
-    # —— Подготовка данных ——
-    cols_needed = list(set(metric_vars + [brand_var, weight_var, date_var]))
-    df_work = df[cols_needed].copy()
-    df_work = df_work.dropna(subset=[brand_var, date_var])
-    df_work[date_var] = pd.to_datetime(df_work[date_var], errors="coerce")
-    df_work = df_work.dropna(subset=[date_var])
-    df_work["_period"] = df_work[date_var].dt.to_period(freq)
-
-    unique_brands = sorted(df_work[brand_var].unique().tolist())
-    brand_names = [fmt_brand_value(b, brand_vl) for b in unique_brands]
-    brand_keys = [_normalize_key(b) for b in unique_brands]
-    all_periods = sorted(df_work["_period"].unique().tolist())
-
-    n_metrics = len(metric_vars)
-    n_brands = len(unique_brands)
-
-    # —— Расчёт данных ——
-    series_data = []
-    sig_data = []        # межбрендовая значимость (цвет значения)
-    dyn_sig_data = []    # значимость динамики (стрелка)
-
-    for mi, mvar in enumerate(metric_vars):
-        df_m = df_work.dropna(subset=[mvar])
-        brand_series = []
-        for bi, bv in enumerate(unique_brands):
-            s = _compute_metric_series(df_m, mvar, brand_var, bv, all_periods, weight_var)
-            brand_series.append(s)
-        series_data.append(brand_series)
-
-        sig = _compute_significance(df_m, mvar, brand_var, weight_var, all_periods)
-        sig_data.append(sig)
-
-        dyn_sig = _compute_dynamics_significance(df_m, mvar, brand_var, weight_var, all_periods)
-        dyn_sig_data.append(dyn_sig)
-
-    # —— Размеры ячеек ——
-    label_col_w = 200 if not is_mobile else 130
-    brand_col_w = 160 if not is_mobile else 110
-    cell_h = 90 if not is_mobile else 70
-
-    total_w = label_col_w + brand_col_w * n_brands
-    total_h = 50 + cell_h * n_metrics  # 50px для заголовка
-
-    # —— Создаём фигуру ——
-    specs = [[{"type": "scatter"} for _ in range(n_brands)] for _ in range(n_metrics)]
-
-    fig = make_subplots(
-        rows=n_metrics,
-        cols=n_brands,
-        specs=specs,
-        horizontal_spacing=0.02,
-        vertical_spacing=0.02,
+    # Приводим дату к datetime
+    work_df["_block5_date"] = pd.to_datetime(
+        work_df[date_var],
+        errors="coerce",
     )
 
-    # —— Добавляем спарклайны ——
-    for mi in range(n_metrics):
-        for bi in range(n_brands):
-            vals = series_data[mi][bi]
-            color = (brand_colors or {}).get(brand_keys[bi], "hsl({0}, 70%, 50%)".format(bi * 60 % 360))
+    work_df = work_df.dropna(subset=["_block5_date", brand_var])
 
-            x_vals = list(range(len(vals)))
-            y_vals = [v if not np.isnan(v) else None for v in vals]
+    if work_df.empty:
+        return """
+        <div class="metrics-empty">
+            Не удалось определить даты для построения динамики.
+        </div>
+        """
 
-            fig.add_trace(
-                go.Scatter(
-                    x=x_vals,
-                    y=y_vals,
-                    mode="lines",
-                    line=dict(color=color, width=2),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ),
-                row=mi + 1,
-                col=bi + 1,
-            )
+    # Нормализуем частоту периода
+    period_freq = normalize_period_freq(freq)
 
-            fig.update_xaxes(
-                showgrid=False, zeroline=False, showticklabels=False,
-                row=mi + 1, col=bi + 1,
-            )
-            fig.update_yaxes(
-                showgrid=False, zeroline=False, showticklabels=False,
-                row=mi + 1, col=bi + 1,
-            )
-
-    # —— Аннотации через paper-координаты ——
-    x_step = 1.0 / n_brands
-    y_step = 1.0 / n_metrics
-
-    annotations = []
-
-    # Заголовки столбцов (бренды) — сверху
-    for bi, bname in enumerate(brand_names):
-        x_pos = bi * x_step + x_step / 2
-        annotations.append(dict(
-            text="<b>{0}</b>".format(bname),
-            x=x_pos, y=1.02,
-            xref="paper", yref="paper",
-            xanchor="center", yanchor="bottom",
-            showarrow=False,
-            font=dict(size=font_px, family=FONT_FAMILY, color="#333333"),
-        ))
-
-    # Заголовки строк (показатели) — слева
-    for mi, mlabel in enumerate(metric_labels):
-        y_pos = 1.0 - (mi + 0.5) * y_step
-        annotations.append(dict(
-            text=mlabel,
-            x=-0.001, y=y_pos,
-            xref="paper", yref="paper",
-            xanchor="right", yanchor="middle",
-            showarrow=False,
-            font=dict(size=font_px, family=FONT_FAMILY, color="#333333"),
-        ))
-
-    # Значения последнего периода
-    # Цвет — от межбрендовой значимости
-    # Стрелка ▲▼ — от значимости динамики
-    val_font_size = max(int(font_px * 0.85), 10)
-
-    for mi in range(n_metrics):
-        for bi in range(n_brands):
-            vals = series_data[mi][bi]
-            if not vals or all(np.isnan(v) for v in vals):
-                continue
-
-            last_val = vals[-1]
-            if np.isnan(last_val):
-                continue
-
-            # Цвет значения — межбрендовая значимость
-            sig_dir, sig_color = sig_data[mi].get(brand_keys[bi], (None, "#999999"))
-            color = sig_color if sig_dir else "#333333"
-
-            # Стрелка — значимость динамики
-            dyn_dir = dyn_sig_data[mi].get(brand_keys[bi], None)
-            if dyn_dir == "up":
-                arrow = " \u25b2"
-            elif dyn_dir == "down":
-                arrow = " \u25bc"
-            else:
-                arrow = ""
-
-            text = "{0:.2f}{1}".format(last_val, arrow)
-
-            x_pos = bi * x_step + x_step / 2
-            y_pos = 1.0 - (mi + 1) * y_step + 0.02
-
-            annotations.append(dict(
-                text=text,
-                x=x_pos, y=y_pos,
-                xref="paper", yref="paper",
-                xanchor="center", yanchor="bottom",
-                showarrow=False,
-                font=dict(size=val_font_size, family=FONT_FAMILY, color=color),
-            ))
-
-    # —— Линии-разделители ——
-    shapes = []
-
-    for mi in range(n_metrics + 1):
-        y = 1.0 - mi * y_step
-        shapes.append(dict(
-            type="line",
-            x0=0, x1=1.0,
-            y0=y, y1=y,
-            xref="paper", yref="paper",
-            line=dict(color="#e0e0e0", width=1),
-        ))
-
-    for bi in range(n_brands + 1):
-        x = bi * x_step
-        shapes.append(dict(
-            type="line",
-            x0=x, x1=x,
-            y0=0, y1=1.0,
-            xref="paper", yref="paper",
-            line=dict(color="#e0e0e0", width=1),
-        ))
-
-    fig.update_layout(
-        annotations=annotations,
-        shapes=shapes,
-        margin=dict(l=label_col_w, r=20, t=60, b=20),
-        height=total_h,
-        width=total_w,
-        paper_bgcolor="#ffffff",
-        plot_bgcolor="#ffffff",
-        hovermode=False,
+    work_df["_block5_period"] = (
+        work_df["_block5_date"].dt.to_period(period_freq)
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    all_periods = sorted(
+        work_df["_block5_period"].dropna().unique().tolist()
+    )
+
+    if not all_periods:
+        return """
+        <div class="metrics-empty">
+            Нет периодов для отображения.
+        </div>
+        """
+
+    unique_brands = (
+        work_df[brand_var]
+        .dropna()
+        .drop_duplicates()
+        .tolist()
+    )
+
+    # Стабильная сортировка брендов
+    unique_brands = sorted(unique_brands, key=lambda value: str(value))
+    table_html = generate_styles(font_px)
+
+    # На мобильном — до 4 брендов в одной таблице,
+    # на desktop — до 10.
+    brands_per_table = 4 if is_mobile else 10
+
+    if len(unique_brands) > brands_per_table:
+        brand_groups = [
+            unique_brands[i:i + brands_per_table]
+            for i in range(0, len(unique_brands), brands_per_table)
+        ]
+    else:
+        brand_groups = [unique_brands]
+
+    # Общие границы Y:
+    # отдельный диапазон для KPI и общий — для всех extra_vars.
+    metric_values = {}
+
+    for metric_var in metric_vars:
+        metric_values[metric_var] = {}
+
+        for brand in unique_brands:
+            metric_values[metric_var][brand] = compute_metric_series(
+                df=work_df,
+                metric_var=metric_var,
+                brand_var=brand_var,
+                brand_value=brand,
+                all_periods=all_periods,
+                weight_var=weight_var,
+            )
+
+    kpi_range = get_shared_y_range(
+        [
+            value
+            for brand_values in metric_values.get(kpi_var, {}).values()
+            for value in brand_values
+        ]
+    )
+
+    extra_values = [
+        value
+        for metric_var in cfg.get("extra_vars", [])
+        if metric_var in metric_values
+        for brand_values in metric_values[metric_var].values()
+        for value in brand_values
+    ]
+    extra_range = get_shared_y_range(extra_values)
+
+    for group_index, brand_group in enumerate(brand_groups):
+        if len(brand_groups) > 1:
+            first_number = group_index * brands_per_table + 1
+            last_number = first_number + len(brand_group) - 1
+
+            table_html += (
+                '<div class="brand-group-title">'
+                f'Бренды {first_number}–{last_number}'
+                '</div>'
+            )
+
+        table_html += generate_table_structure(
+            df=work_df,
+            metric_vars=metric_vars,
+            var_labels=var_labels,
+            unique_brands=brand_group,
+            all_periods=all_periods,
+            brand_var=brand_var,
+            weight_var=weight_var,
+            brand_colors=brand_colors,
+            val_labels=val_labels,
+            metric_values=metric_values,
+            kpi_var=kpi_var,
+            kpi_range=kpi_range,
+            extra_range=extra_range,
+        )
+    return table_html
+
+def normalize_period_freq(freq: str) -> str:
+    """
+    Приводит частоту к формату pandas Period.
+    """
+
+    mapping = {
+        "W": "W-SUN",
+        "M": "M",
+        "Q": "Q",
+        "Y": "Y",
+        "A": "Y",
+    }
+
+    return mapping.get(freq, freq or "M")
+
+def get_shared_y_range(values: list) -> tuple[float, float]:
+    """
+    Возвращает общий конечный диапазон Y.
+
+    Игнорирует NaN и бесконечные значения.
+    Если все значения одинаковые, добавляет небольшой отступ,
+    чтобы точки не легли на границу графика.
+    """
+
+    valid_values = []
+
+    for value in values:
+        try:
+            value = float(value)
+            if np.isfinite(value):
+                valid_values.append(value)
+        except (TypeError, ValueError):
+            continue
+
+    if not valid_values:
+        return 0.0, 1.0
+
+    y_min = min(valid_values)
+    y_max = max(valid_values)
+
+    if y_min == y_max:
+        padding = abs(y_min) * 0.05 or 1.0
+        return y_min - padding, y_max + padding
+
+    return y_min, y_max
+
+def generate_table_structure(
+    df: pd.DataFrame,
+    metric_vars: list,
+    var_labels: dict,
+    unique_brands: list,
+    all_periods: list,
+    brand_var: str,
+    weight_var: str,
+    brand_colors: dict,
+    val_labels: dict,
+    metric_values: dict,
+    kpi_var: str,
+    kpi_range: tuple,
+    extra_range: tuple,
+) -> str:
+    table = ['<table class="metrics-table">']
+
+    table.append(
+        generate_header(
+            unique_brands=unique_brands,
+            val_labels=val_labels,
+            brand_var=brand_var,
+        )
+    )
+    table.append("<tbody>")
+
+    for metric_var in metric_vars:
+        metric_name = var_labels.get(metric_var, metric_var)
+
+        table.append(
+            generate_row(
+                metric_name=metric_name,
+                metric_var=metric_var,
+                df=df,
+                unique_brands=unique_brands,
+                all_periods=all_periods,
+                brand_var=brand_var,
+                weight_var=weight_var,
+                brand_colors=brand_colors,
+                metric_values=metric_values,
+                y_range=kpi_range if metric_var == kpi_var else extra_range )
+        )
+
+    table.append("</tbody>")
+    table.append("</table>")
+
+    return "".join(table)
+
+
+def generate_header(
+    unique_brands: list,
+    val_labels: dict,
+    brand_var: str,
+) -> str:
+    """
+    Формирует заголовок таблицы с отображаемыми лейблами брендов.
+    """
+
+    header = [
+        "<thead>",
+        "<tr>",
+        '<th class="labels">Метрика</th>',
+    ]
+
+    brand_value_labels = val_labels.get(brand_var, {})
+
+    for brand in unique_brands:
+        brand_label = fmt_brand_value(
+            brand,
+            brand_value_labels,
+        )
+
+        header.append(
+            f"<th>{html.escape(str(brand_label))}</th>"
+        )
+
+    header.extend([
+        "</tr>",
+        "</thead>",
+    ])
+
+    return "".join(header)
+
+
+def generate_row(
+    metric_name: str,
+    metric_var: str,
+    df: pd.DataFrame,
+    unique_brands: list,
+    all_periods: list,
+    brand_var: str,
+    weight_var: str,
+    brand_colors: dict,
+    metric_values: dict,
+    y_range: tuple,
+) -> str:
+    row = [
+        "<tr>",
+        f'<td class="labels">{html.escape(str(metric_name))}</td>',
+    ]
+
+    for brand in unique_brands:
+        values = metric_values.get(metric_var, {}).get(brand, [])
+        row.append(
+            generate_cell(
+                brand=brand,
+                values=values,
+                brand_colors=brand_colors,
+                y_range=y_range,
+            )
+        )
+    row.append("</tr>")
+
+    return "".join(row)
+
+
+def compute_metric_series(
+    df: pd.DataFrame,
+    metric_var: str,
+    brand_var: str,
+    brand_value,
+    all_periods: list,
+    weight_var: str,
+) -> list:
+    """
+    Расчёт агрегированного значения показателя
+    по каждому периоду для конкретного бренда.
+    """
+
+    brand_df = df[df[brand_var] == brand_value]
+    result = []
+
+    for period in all_periods:
+        period_df = brand_df[
+            brand_df["_block5_period"] == period
+        ].copy()
+
+        if period_df.empty:
+            result.append(np.nan)
+            continue
+
+        values = pd.to_numeric(
+            period_df[metric_var],
+            errors="coerce",
+        )
+
+        valid_mask = values.notna()
+
+        if weight_var and weight_var in period_df.columns:
+            weights = pd.to_numeric(
+                period_df[weight_var],
+                errors="coerce",
+            )
+
+            valid_mask &= weights.notna()
+
+            values = values[valid_mask]
+            weights = weights[valid_mask]
+
+            if values.empty or weights.empty:
+                result.append(np.nan)
+                continue
+
+            weight_sum = weights.sum()
+
+            if not np.isfinite(weight_sum) or weight_sum == 0:
+                result.append(np.nan)
+                continue
+
+            value = np.average(
+                values.to_numpy(dtype=float),
+                weights=weights.to_numpy(dtype=float),
+            )
+        else:
+            values = values[valid_mask]
+
+            if values.empty:
+                result.append(np.nan)
+                continue
+
+            value = values.mean()
+
+        result.append(
+            float(value) if np.isfinite(value) else np.nan
+        )
+
+    return result
+
+
+def generate_cell(
+    brand,
+    values: list,
+    brand_colors: dict,
+    y_range: tuple,
+) -> str:
+    cleaned_values = clean_sparkline_data(values)
+
+    if not cleaned_values:
+        return """
+        <td class="metric-cell metric-empty-cell">
+            —
+        </td>
+        """
+
+    last_value = cleaned_values[-1]
+
+    # В конфиге ключи сохранены через normalize_key()
+    brand_key = normalize_key(brand)
+    brand_color = brand_colors.get(brand_key, "#333333")
+
+    sparkline_svg = generate_sparkline_svg(
+        values=cleaned_values,
+        color=brand_color,
+        width=100,
+        height=28,
+        y_min=y_range[0],
+        y_max=y_range[1],
+    )
+
+    return f"""
+    <td class="metric-cell">
+        <div class="metric-value">
+            {last_value:.2f}
+        </div>
+
+        <div class="sparkline-container">
+            {sparkline_svg}
+        </div>
+    </td>
+    """
+
+def generate_styles(font_px: int) -> str:
+    return f"""
+    <style>
+        .metrics-table {{
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-family: Inter, -apple-system,
+                BlinkMacSystemFont, 'Segoe UI', Roboto,
+                'Helvetica Neue', Arial, sans-serif;
+            font-size: {font_px}px;
+        }}
+
+        .metrics-table th,
+        .metrics-table td {{
+            border: 1px solid #e0e0e0;
+            padding: 8px;
+        }}
+
+        .metrics-table th {{
+            background: #f7f9fb;
+            font-weight: 600;
+            text-align: center;
+        }}
+
+        .metrics-table {{
+            width: 100%;
+            max-width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            font-family: Inter, -apple-system,
+                BlinkMacSystemFont, 'Segoe UI', Roboto,
+                'Helvetica Neue', Arial, sans-serif;
+            font-size: {font_px}px;
+        }}
+
+        .metrics-table th:first-child,
+        .metrics-table td:first-child {{
+            width: 25%;
+            max-width: 25vw;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }}
+
+        .brand-group-title {{
+            margin: 18px 0 6px;
+            font-weight: 600;
+        }}
+
+        .labels {{
+            font-weight: 600;
+            text-align: left;
+        }}
+
+        .metric-cell {{
+            position: relative;
+            height: 58px;
+            min-width: 110px;
+            vertical-align: middle;
+            text-align: center;
+            overflow: visible;
+        }}
+
+        .metric-value {{
+            position: absolute;
+            z-index: 2;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(0, 0, 0, 0.45);
+            font-size: 14px;
+            font-weight: 700;
+            pointer-events: none;
+            white-space: nowrap;
+        }}
+
+        .sparkline-container {{
+            width: 100%;
+            height: 42px;
+        }}
+
+        .sparkline-container svg {{
+            width: 100%;
+            height: 100%;
+            display: block;
+            overflow: visible;
+        }}
+
+        .sparkline-svg {{
+            width: 100%;
+            height: 100%;
+            display: block;
+            overflow: visible;
+        }}
+
+        .sparkline-path {{
+            pointer-events: none;
+        }}
+
+        .sparkline-point {{
+            transition:
+                r 0.15s ease,
+                opacity 0.15s ease;
+        }}
+
+        .sparkline-container {{
+            width: 100%;
+            height: 42px;
+            overflow: visible;
+        }}
+
+        .sparkline-plot {{
+            position: relative;
+            width: 100%;
+            height: 42px;
+            overflow: visible;
+        }}
+
+        .sparkline-svg {{
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+            overflow: visible;
+        }}
+
+        .sparkline-marker {{
+            position: absolute;
+            z-index: 3;
+            width: 0;
+            height: 0;
+        }}
+
+        .sparkline-dot {{
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 8px;
+            height: 8px;
+            border: 1px solid #ffffff;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+        }}
+
+        .sparkline-tooltip {{
+            position: absolute;
+            left: 50%;
+            bottom: 9px;
+            display: block;
+            width: max-content;
+            max-width: 120px;
+            padding: 4px 7px;
+            border-radius: 5px;
+            background: rgba(30, 30, 30, 0.92);
+            color: #ffffff;
+            font-size: 11px;
+            line-height: 1.2;
+            white-space: nowrap;
+            text-align: center;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transform: translateX(-50%);
+        }}
+
+        .sparkline-marker:hover .sparkline-tooltip,
+        .sparkline-marker:focus-within .sparkline-tooltip {{
+            opacity: 1;
+            visibility: visible;
+        }}
+
+        @media (hover: none) {{
+            .sparkline-marker:active .sparkline-tooltip {{
+                opacity: 1;
+                visibility: visible;
+            }}
+        }}
+
+        .sparkline-tooltip {{
+            opacity: 0;
+            pointer-events: none;
+            fill: #222222;
+            stroke: #ffffff;
+            stroke-width: 3px;
+            paint-order: stroke;
+            font-size: 10px;
+            font-weight: 700;
+        }}
+
+        .sparkline-point-group:hover .sparkline-tooltip,
+        .sparkline-point-group:focus .sparkline-tooltip {{
+            opacity: 1;
+        }}
+
+        .sparkline-point-group:focus .sparkline-point {{
+            r: 5.5;
+            stroke: #ffffff;
+            stroke-width: 2;
+        }}        
+
+        .metric-empty-cell {{
+            color: #999999;
+            text-align: center;
+        }}
+
+        .metrics-empty {{
+            padding: 16px;
+            color: #777777;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }}
+    </style>
+    """

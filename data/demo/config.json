@@ -1,30 +1,46 @@
 {
-  "kpi_var": "KPI",
-  "brand_var": "Bank",
-  "weight_var": "Weight",
-  "date_var": "Date",
+  "kpi_var": "NPS",
+  "brand_var": "brand",
+  "weight_var": "weight",
+  "date_var": "date",
   "comment_vars": [
-    "Q1",
-    "Q1_1",
-    "Q1_2",
-    "Q1_3"
+    "TS0",
+    "TS0_1",
+    "TS0_2",
+    "TS0_3",
+    "TS0_4",
+    "TS0_5",
+    "TS0_6",
+    "TS0_7"
   ],
   "extra_vars": [
-    "Q2",
-    "Q3",
-    "Q4",
-    "Q5",
-    "Q6",
-    "Q7"
+    "TS8_1",
+    "TS8_2",
+    "TS8_3",
+    "TS8_4",
+    "TS8_5",
+    "TS8_6",
+    "TS8_7",
+    "TS8_8",
+    "TS8_9",
+    "TS8_10",
+    "TS8_11",
+    "TS8_12",
+    "TS8_13",
+    "TS8_14"
   ],
   "filter_vars": [
-    "Age",
-    "Bank"
+    "NPS"
   ],
   "_freq_label": "Квартал",
   "brand_colors": {
-    "1": "#f90810",
-    "2": "#84f518",
-    "3": "#685bf1"
+    "1": "#1f77b4",
+    "2": "#ff7f0e",
+    "3": "#2ca02c",
+    "4": "#d62728",
+    "5": "#9467bd",
+    "6": "#8c564b",
+    "7": "#e377c2",
+    "8": "#7f7f7f"
   }
 }

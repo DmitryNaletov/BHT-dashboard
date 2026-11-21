@@ -1,182 +1,375 @@
+import math
+
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import numpy as np
-import math
 import streamlit as st
 
-from ..config import FONT_FAMILY, GRAY, FONT_PX
 from ..analytics import (
-    format_period, t_test_vs_overall, weighted_mean, weighted_std, fmt_brand_value,
+    fmt_brand_value,
+    format_period,
+    t_test_vs_overall,
+    weighted_group_stats,
+    weighted_group_stats_from_df,
 )
 
-def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, is_mobile):
+from ..config import (
+    FONT_FAMILY,
+    SETTINGS,
+    get_font_size,
+    get_text_color,
+)
+
+
+def _theme_backgrounds():
+    """Цвета фона таблицы для текущей темы Streamlit."""
+    is_dark = st.get_option("theme.base") == "dark"
+
+    page_background = (
+        st.get_option("theme.backgroundColor")
+        or ("#0e1117" if is_dark else "#ffffff")
+    )
+    header_background = (
+        st.get_option("theme.secondaryBackgroundColor")
+        or ("#262730" if is_dark else "#f0f2f6")
+    )
+
+    return page_background, header_background
+
+
+def _brand_key(value):
+    """Нормализует числовые значения брендов для поиска цвета."""
+    if isinstance(value, (int, float)) and float(value).is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _build_chart(
+    df,
+    cfg,
+    freq,
+    var_labels,
+    val_labels,
+    brand_colors,
+    font_px,
+    is_mobile,
+):
+    # Названия колонок и настройки отображения.
     kpi_var = cfg["kpi_var"]
     brand_var = cfg["brand_var"]
     weight_var = cfg["weight_var"]
     date_var = cfg["date_var"]
 
-    vl = val_labels or {}
+    text_color = get_text_color()
+    value_font = get_font_size("value_label", is_mobile)
+    tooltip_font = get_font_size("tooltip", is_mobile)
+    axis_tick_font = get_font_size("axis_tick", is_mobile)
+    base_font = get_font_size("base", is_mobile)
 
-    df_work = df[[kpi_var, brand_var, weight_var, date_var]].copy()
-    df_work = df_work.dropna(subset=[kpi_var, brand_var, date_var])
-    df_work[date_var] = pd.to_datetime(df_work[date_var], errors="coerce")
+    positive_color = SETTINGS["colors"]["significance_positive"]
+    negative_color = SETTINGS["colors"]["significance_negative"]
+
+    # Подготовка данных: оставляем нужные колонки,
+    # преобразуем даты и назначаем период.
+    df_work = df[
+        [kpi_var, brand_var, weight_var, date_var]
+    ].copy()
+
+    df_work = df_work.dropna(
+        subset=[kpi_var, brand_var, date_var]
+    )
+    df_work[date_var] = pd.to_datetime(
+        df_work[date_var],
+        errors="coerce",
+    )
     df_work = df_work.dropna(subset=[date_var])
+
+    if df_work.empty:
+        return go.Figure()
+
     df_work["_period"] = df_work[date_var].dt.to_period(freq)
 
-    unique_brands = sorted(df_work[brand_var].unique().tolist())
-    brand_val_labels = vl.get(brand_var, {})
-    brand_names = [fmt_brand_value(b, brand_val_labels) for b in unique_brands]
+    unique_brands = sorted(
+        df_work[brand_var].dropna().unique().tolist(),
+        key=str,
+    )
+    all_periods = sorted(df_work["_period"].dropna().unique().tolist())
 
-    all_periods = sorted(df_work["_period"].unique().tolist())
-    period_labels = [format_period(p, freq) for p in all_periods]
+    if not unique_brands or not all_periods:
+        return go.Figure()
+
+    # Подписи брендов и периодов.
+    brand_value_labels = (val_labels or {}).get(brand_var, {})
+    brand_names = [
+        fmt_brand_value(brand, brand_value_labels)
+        for brand in unique_brands
+    ]
+    period_labels = [
+        format_period(period, freq)
+        for period in all_periods
+    ]
+
     vertical_text = len(all_periods) > 6
     n_brands = len(unique_brands)
 
-    # Средние по брендам для каждого периода
+    # Расчёт среднего, стандартного отклонения и базы
+    # каждого бренда для каждого периода.
     results = {}
-    for brand_val in unique_brands:
-        brand_key = str(int(brand_val)) if isinstance(brand_val, (int, float)) and float(brand_val).is_integer() else str(brand_val)
-        mask = df_work[brand_var] == brand_val
-        df_brand = df_work[mask]
-        kpi_series = []
+    stds_by_period = {}
+    ns_by_period = {}
+
+    for brand in unique_brands:
+        brand_key = _brand_key(brand)
+        brand_df = df_work[df_work[brand_var] == brand]
+
+        results[brand_key] = []
+        stds_by_period[brand_key] = []
+        ns_by_period[brand_key] = []
+
         for period in all_periods:
-            df_p = df_brand[df_brand["_period"] == period]
-            if len(df_p) > 0:
-                w = df_p[weight_var].fillna(1).values
-                v = df_p[kpi_var].values
-                kpi_series.append(np.average(v, weights=w) if w.sum() > 0 else np.nan)
-            else:
-                kpi_series.append(np.nan)
-        results[brand_key] = kpi_series
+            period_df = brand_df[brand_df["_period"] == period]
 
-    # Значимость последнего периода: бренд vs остальные (t-тест Уэлча)
-    sig_colors = {}
+            values = pd.to_numeric(
+                period_df[kpi_var],
+                errors="coerce",
+            ).to_numpy(dtype=float)
+            weights = pd.to_numeric(
+                period_df[weight_var],
+                errors="coerce",
+            ).fillna(1).to_numpy(dtype=float)
+
+            mean, std, n = weighted_group_stats(values, weights)
+
+            results[brand_key].append(mean)
+            stds_by_period[brand_key].append(std)
+            ns_by_period[brand_key].append(n)
+
+    # Значимость сравнения бренда со средним остальных брендов
+    # рассчитывается отдельно для каждого периода.
+    sig_vs_others = {
+        _brand_key(brand): [None] * len(all_periods)
+        for brand in unique_brands
+    }
+
+    for period_index, period in enumerate(all_periods):
+        period_data = df_work[df_work["_period"] == period]
+
+        for brand in unique_brands:
+            brand_key = _brand_key(brand)
+            brand_data = period_data[period_data[brand_var] == brand]
+            others_data = period_data[period_data[brand_var] != brand]
+
+            brand_stats = weighted_group_stats_from_df(
+                brand_data,
+                kpi_var,
+                weight_var,
+            )
+            others_stats = weighted_group_stats_from_df(
+                others_data,
+                kpi_var,
+                weight_var,
+            )
+            
+            if brand_stats is None or others_stats is None:
+                continue
+
+            is_significant, direction, _ = t_test_vs_overall(
+                brand_stats[0],
+                brand_stats[1],
+                brand_stats[2],
+                others_stats[0],
+                others_stats[1],
+                others_stats[2],
+            )
+
+            if is_significant:
+                sig_vs_others[brand_key][period_index] = direction
+
+    # Значимость динамики бренда между двумя последними периодами.
+    # Она отвечает только за стрелку, не за цвет числа.
     sig_directions = {}
-    last_period = all_periods[-1]
-    df_last = df_work[df_work["_period"] == last_period]
 
-    for brand_val in unique_brands:
-        brand_key = str(int(brand_val)) if isinstance(brand_val, (int, float)) and float(brand_val).is_integer() else str(brand_val)
-        mask_b = df_last[brand_var] == brand_val
-        df_b = df_last[mask_b]
-        df_o = df_last[~mask_b]
+    for brand in unique_brands:
+        brand_key = _brand_key(brand)
 
-        if len(df_b) < 2 or len(df_o) < 2:
-            sig_colors[brand_key] = "#999999"
+        if len(all_periods) < 2:
             sig_directions[brand_key] = None
             continue
 
-        w_b = df_b[weight_var].fillna(1).values
-        v_b = df_b[kpi_var].values
-        w_o = df_o[weight_var].fillna(1).values
-        v_o = df_o[kpi_var].values
+        current_mean = results[brand_key][-1]
+        previous_mean = results[brand_key][-2]
+        current_std = stds_by_period[brand_key][-1]
+        previous_std = stds_by_period[brand_key][-2]
+        current_n = ns_by_period[brand_key][-1]
+        previous_n = ns_by_period[brand_key][-2]
 
-        if w_b.sum() == 0 or w_o.sum() == 0:
-            sig_colors[brand_key] = "#999999"
+        if (
+            current_n < 2
+            or previous_n < 2
+            or not np.isfinite(current_mean)
+            or not np.isfinite(previous_mean)
+            or not np.isfinite(current_std)
+            or not np.isfinite(previous_std)
+        ):
             sig_directions[brand_key] = None
             continue
 
-        m1 = np.average(v_b, weights=w_b)
-        m2 = np.average(v_o, weights=w_o)
-        s1 = weighted_std(v_b, w_b)
-        s2 = weighted_std(v_o, w_o)
-        n1 = len(df_b)
-        n2 = len(df_o)
+        is_significant, direction, _ = t_test_vs_overall(
+            current_mean,
+            current_std,
+            current_n,
+            previous_mean,
+            previous_std,
+            previous_n,
+        )
 
-        is_sig, direction, _ = t_test_vs_overall(m1, s1, n1, m2, s2, n2)
-        if is_sig and direction == "up":
-            sig_colors[brand_key] = "green"
-            sig_directions[brand_key] = "up"
-        elif is_sig and direction == "down":
-            sig_colors[brand_key] = "red"
-            sig_directions[brand_key] = "down"
-        else:
-            sig_colors[brand_key] = "#999999"
-            sig_directions[brand_key] = None
+        sig_directions[brand_key] = (
+            direction if is_significant else None
+        )
 
+    # Настройки высоты и места для подписей и легенды.
     fig = go.Figure()
 
-    # ВАЖНО: отключаем автомасштабирование текста. 
-    # uniformtext_minsize=12 — минимальный размер, который Plotly не будет уменьшать.
-    # uniformtext_mode='hide' — если текст не влезает, он скроется (лучше, чем становиться микроскопическим).
-    # Если хотите, чтобы текст всегда был виден даже ценой наложения, используйте mode='show'
-    fig.update_layout(
-        uniformtext_minsize=12, 
-        uniformtext_mode='show',  # Или 'hide', если наезжание совсем недопустимо
-    )
-
-    for i, brand_val in enumerate(unique_brands):
-        brand_key = str(int(brand_val)) if isinstance(brand_val, (int, float)) and float(brand_val).is_integer() else str(brand_val)
-        brand_name = brand_names[i]
-        color = (brand_colors or {}).get(brand_key, "hsl(" + str(i * 60 % 360) + ", 70%, 50%)")
-
-        y_vals = results[brand_key]
-        x_labels = period_labels
-
-        # Метки — всегда средние (не проценты), всегда снаружи
-        text_vals = []
-        for j, v in enumerate(y_vals):
-            if np.isnan(v):
-                text_vals.append("")
-                continue
-            is_last = (j == len(y_vals) - 1)
-            if is_last and sig_directions.get(brand_key) == "up":
-                text_vals.append("{:.2f}\n\u25b2".format(v))
-            elif is_last and sig_directions.get(brand_key) == "down":
-                text_vals.append("{:.2f}\n\u25bc".format(v))
-            else:
-                text_vals.append("{:.2f}".format(v))
-
-        safe_font_size = max(int(font_px), 12)
-
-        fig.add_trace(go.Bar(
-            x=x_labels,
-            y=y_vals,
-            name=brand_name,
-            marker_color=color,
-            text=text_vals,
-            textposition="outside",
-            textangle=270 if vertical_text else 0,
-            # Единый размер для всех меток — это работает в Plotly
-            textfont=dict(size=safe_font_size, color=GRAY, family=FONT_FAMILY),
-            hovertemplate=brand_name + "<br>%{x}: %{y:.2f}<extra></extra>",
-        ))
-
-    # —— Динамический расчёт высоты подписей оси X и легенды ——
-    if vertical_text:
-        max_label_len = max(len(p) for p in period_labels)
-        xaxis_space = max_label_len * font_px * 0.65 + 15
-    else:
-        xaxis_space = font_px + 15
-
     items_per_row = 3 if is_mobile else 5
-    n_legend_rows = max(1, math.ceil(n_brands / items_per_row))
-    legend_h = n_legend_rows * (font_px + 8)
+    legend_rows = max(1, math.ceil(n_brands / items_per_row))
 
-    t_margin = 20
-    b_margin = int(xaxis_space + legend_h + 25)
+    if vertical_text:
+        max_label_len = max(len(label) for label in period_labels)
+        xaxis_space = max_label_len * base_font * 0.65 + 15
+    else:
+        xaxis_space = base_font + 15
+
+    legend_height = legend_rows * (base_font + 8)
+    top_margin = 20
+    bottom_margin = int(xaxis_space + legend_height + 25)
 
     total_height = max(600, n_brands * 35 + 200)
     if vertical_text:
         total_height = max(total_height, 600 + xaxis_space * 0.4)
 
-    plot_area_h = total_height - t_margin - b_margin
-    if plot_area_h > 0:
-        legend_y = -(xaxis_space + 8) / plot_area_h
+    plot_area_height = total_height - top_margin - bottom_margin
+    if plot_area_height > 0:
+        legend_y = -(xaxis_space + 8) / plot_area_height
     else:
         legend_y = -0.20
 
+    # Добавление столбцов и подписей.
+    # Цвет числа — значимость относительно остальных брендов
+    # в том же периоде; стрелка — значимость динамики.
+    colors = brand_colors or {}
+
+    for index, brand in enumerate(unique_brands):
+        brand_key = _brand_key(brand)
+        brand_name = str(brand_names[index])
+
+        if brand_name.strip().lower() == "undefined":
+            brand_name = ""
+
+        default_color = f"hsl({index * 60 % 360}, 70%, 50%)"
+        brand_color = colors.get(brand_key, default_color)
+
+        y_values = results[brand_key]
+        text_values = []
+        text_colors = []
+
+        for period_index, value in enumerate(y_values):
+            if not np.isfinite(value):
+                text_values.append("")
+                text_colors.append(text_color)
+                continue
+
+            value_label = f"{value:.1f}"
+
+            # Число окрашивается по сравнению с другими брендами
+            # в этом же периоде.
+            cross_direction = sig_vs_others[brand_key][period_index]
+            if cross_direction == "up":
+                label_color = positive_color
+            elif cross_direction == "down":
+                label_color = negative_color
+            else:
+                label_color = text_color
+
+            # Стрелка окрашивается отдельно по динамике
+            # между двумя последними периодами.
+            trend_direction = (
+                sig_directions.get(brand_key)
+                if period_index == len(y_values) - 1
+                else None
+            )
+
+            if trend_direction == "up":
+                arrow = (
+                    f"<span style='color:{positive_color}'>▲</span><br>"
+                )
+            elif trend_direction == "down":
+                arrow = (
+                    f"<span style='color:{negative_color}'>▼</span><br>"
+                )
+            else:
+                arrow = ""
+
+            text_values.append(
+                f"{arrow}"
+                f"<span style='color:{label_color}'>{value_label}</span>"
+            )
+            text_colors.append(label_color)
+
+        fig.add_trace(
+            go.Bar(
+                x=period_labels,
+                y=y_values,
+                customdata=ns_by_period[brand_key],
+                name=brand_name or " ",
+                marker_color=brand_color,
+                text=text_values,
+                hovertemplate=(
+                    f"{brand_name}<br>"
+                    "%{x}: %{y:.3g}<br>"
+                    "N=%{customdata}"
+                    "<extra></extra>"
+                ),
+                textposition="outside",
+                textangle=270 if vertical_text else 0,
+                textfont=dict(
+                    size=value_font,
+                    color=text_colors,
+                    family=FONT_FAMILY,
+                ),
+                hoverlabel=dict(
+                    font=dict(
+                        family=FONT_FAMILY,
+                        size=tooltip_font,
+                        color=text_color,
+                    )
+                ),
+            )
+        )
+
+    # Общий стиль графика, осей и легенды.
     fig.update_layout(
         barmode="group",
-        font=dict(family=FONT_FAMILY, size=font_px, color=GRAY),
-        title=None,
+        font=dict(
+            family=FONT_FAMILY,
+            size=base_font,
+            color=text_color,
+        ),
+        title=" ",
         xaxis=dict(
             tickangle=270 if vertical_text else 0,
-            tickfont=dict(size=font_px, family=FONT_FAMILY),
+            tickfont=dict(
+                size=axis_tick_font,
+                family=FONT_FAMILY,
+                color=text_color,
+            ),
         ),
         yaxis=dict(
-            tickfont=dict(size=font_px, family=FONT_FAMILY),
-            title=None,
+            title=dict(text=" "),
+            tickfont=dict(
+                size=axis_tick_font,
+                family=FONT_FAMILY,
+                color=text_color,
+            ),
         ),
         legend=dict(
             orientation="h",
@@ -184,9 +377,18 @@ def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, i
             y=legend_y,
             xanchor="center",
             x=0.5,
-            font=dict(size=font_px, family=FONT_FAMILY),
+            font=dict(
+                size=base_font,
+                family=FONT_FAMILY,
+                color=text_color,
+            ),
         ),
-        margin=dict(l=0, r=0, t=t_margin, b=b_margin),
+        margin=dict(
+            l=0,
+            r=0,
+            t=top_margin,
+            b=bottom_margin,
+        ),
         bargap=0.3,
         bargroupgap=0.15,
         height=total_height,
@@ -196,54 +398,183 @@ def _build_chart(df, cfg, freq, var_labels, val_labels, brand_colors, font_px, i
     return fig
 
 
-def _build_table(df, cfg, freq, var_labels, val_labels, brand_colors, font_px):
+def _build_table(
+    df,
+    cfg,
+    freq,
+    var_labels,
+    val_labels,
+    brand_colors,
+    font_px,
+    is_mobile=False,
+):
     kpi_var = cfg["kpi_var"]
     brand_var = cfg["brand_var"]
     weight_var = cfg["weight_var"]
     date_var = cfg["date_var"]
 
-    vl = val_labels or {}
+    df_work = df[
+        [kpi_var, brand_var, weight_var, date_var]
+    ].copy()
 
-    df_work = df[[kpi_var, brand_var, weight_var, date_var]].copy()
-    df_work = df_work.dropna(subset=[kpi_var, brand_var, date_var])
-    df_work[date_var] = pd.to_datetime(df_work[date_var], errors="coerce")
+    df_work = df_work.dropna(
+        subset=[kpi_var, brand_var, date_var]
+    )
+    df_work[date_var] = pd.to_datetime(
+        df_work[date_var],
+        errors="coerce",
+    )
     df_work = df_work.dropna(subset=[date_var])
+
+    if df_work.empty:
+        st.info("Нет данных для отображения таблицы.")
+        return
+
     df_work["_period"] = df_work[date_var].dt.to_period(freq)
 
-    unique_brands = sorted(df_work[brand_var].unique().tolist())
-    brand_val_labels = vl.get(brand_var, {})
-    brand_names = [fmt_brand_value(b, brand_val_labels) for b in unique_brands]
+    unique_brands = sorted(
+        df_work[brand_var].dropna().unique().tolist(),
+        key=str,
+    )
+    if not unique_brands:
+        st.info("Нет брендов для отображения таблицы.")
+        return
 
-    all_periods = sorted(df_work["_period"].unique().tolist())
-    period_labels = [format_period(p, freq) for p in all_periods]
+    brand_value_labels = (val_labels or {}).get(brand_var, {})
+    all_periods = sorted(df_work["_period"].dropna().unique().tolist())
+    period_labels = [
+        format_period(period, freq)
+        for period in all_periods
+    ]
 
     rows = []
-    for brand_val in unique_brands:
-        brand_key = str(int(brand_val)) if isinstance(brand_val, (int, float)) and float(brand_val).is_integer() else str(brand_val)
-        mask = df_work[brand_var] == brand_val
-        df_brand = df_work[mask]
-        row = {"Бренд": fmt_brand_value(brand_val, brand_val_labels)}
-        for period, plabel in zip(all_periods, period_labels):
-            df_p = df_brand[df_brand["_period"] == period]
-            if len(df_p) > 0:
-                w = df_p[weight_var].fillna(1).values
-                v = df_p[kpi_var].values
-                row[plabel] = "{:.2f}".format(np.average(v, weights=w)) if w.sum() > 0 else ""
+
+    for brand in unique_brands:
+        brand_df = df_work[df_work[brand_var] == brand]
+        row = {
+            "Бренд": fmt_brand_value(brand, brand_value_labels)
+        }
+
+        for period, period_label in zip(all_periods, period_labels):
+            period_df = brand_df[brand_df["_period"] == period]
+
+            if period_df.empty:
+                row[period_label] = ""
+                continue
+
+            weights = pd.to_numeric(
+                period_df[weight_var],
+                errors="coerce",
+            ).fillna(1).to_numpy(dtype=float)
+            values = pd.to_numeric(
+                period_df[kpi_var],
+                errors="coerce",
+            ).to_numpy(dtype=float)
+
+            valid = np.isfinite(values) & np.isfinite(weights)
+            values = values[valid]
+            weights = weights[valid]
+
+            if len(values) and weights.sum() > 0:
+                row[period_label] = (
+                    f"{np.average(values, weights=weights):.2f}"
+                )
             else:
-                row[plabel] = ""
+                row[period_label] = ""
+
         rows.append(row)
 
     table_df = pd.DataFrame(rows)
-    st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+    scale = SETTINGS["mobile_scale"] if is_mobile else 1.0
+    table_font = get_font_size("metric", is_mobile)
+    text_color = get_text_color()
+    page_background, header_background = _theme_backgrounds()
+
+    table_style = [
+        {
+            "selector": "th",
+            "props": [
+                ("background-color", header_background),
+                ("color", text_color),
+                ("font-family", FONT_FAMILY),
+                ("font-size", f"{table_font}px"),
+                ("font-weight", "bold"),
+                ("border", "1px solid #808080"),
+            ],
+        },
+        {
+            "selector": "td",
+            "props": [
+                ("background-color", page_background),
+                ("color", text_color),
+                ("font-family", FONT_FAMILY),
+                ("font-size", f"{table_font}px"),
+                ("border", "1px solid #808080"),
+            ],
+        },
+    ]
+
+    styled_table = table_df.style.set_table_styles(table_style)
+
+    st.dataframe(
+        styled_table,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
-def render_kpi_dynamics(df, cfg, freq="M",
-                        var_labels=None, val_labels=None,
-                        brand_colors=None, font_px=16, is_mobile=False):
-    view = st.radio("Просмотр", ["График", "Таблица"], horizontal=True, key="b1_view")
+def render_kpi_dynamics(
+    df,
+    cfg,
+    freq="M",
+    var_labels=None,
+    val_labels=None,
+    brand_colors=None,
+    font_px=16,
+    is_mobile=False,
+):
+    interface_font = get_font_size("interface", is_mobile)
+
+    st.markdown(
+        f"""
+        <style>
+        div[role="radiogroup"] label {{
+            font-family: {FONT_FAMILY};
+            font-size: {interface_font}px;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    view = st.radio(
+        "Просмотр",
+        ["График", "Таблица"],
+        horizontal=True,
+        key="b1_view",
+    )
+
     if view == "График":
-        fig = _build_chart(df, cfg, freq, var_labels, val_labels,
-                           brand_colors, font_px, is_mobile)
+        fig = _build_chart(
+            df,
+            cfg,
+            freq,
+            var_labels,
+            val_labels,
+            brand_colors,
+            font_px,
+            is_mobile,
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        _build_table(df, cfg, freq, var_labels, val_labels, brand_colors, font_px)
+        _build_table(
+            df,
+            cfg,
+            freq,
+            var_labels,
+            val_labels,
+            brand_colors,
+            font_px,
+            is_mobile,
+        )

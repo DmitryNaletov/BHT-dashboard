@@ -14,6 +14,53 @@ def weighted_std(series, weights):
     var = np.average((series - m) ** 2, weights=weights)
     return np.sqrt(var)
 
+def weighted_group_stats(values, weights):
+    """Возвращает взвешенное среднее, стандартное отклонение и размер базы.
+
+    Учитывает только конечные значения и конечные положительные веса.
+    Если пригодных наблюдений нет, возвращает (nan, nan, 0).
+    """
+    values = np.asarray(values, dtype=float)
+    weights = np.asarray(weights, dtype=float)
+
+    valid = (
+        np.isfinite(values)
+        & np.isfinite(weights)
+        & (weights > 0)
+    )
+    values = values[valid]
+    weights = weights[valid]
+
+    if len(values) == 0:
+        return np.nan, np.nan, 0
+
+    mean = float(np.average(values, weights=weights))
+    std = float(weighted_std(values, weights))
+
+    return mean, std, len(values)
+
+def weighted_group_stats_from_df(df, value_col, weight_col):
+    """Считает взвешенные среднее, стандартное отклонение и базу по колонкам DataFrame.
+
+    Возвращает None, если после очистки осталось меньше двух наблюдений.
+    """
+    values = pd.to_numeric(
+        df[value_col],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+
+    weights = pd.to_numeric(
+        df[weight_col],
+        errors="coerce",
+    ).fillna(1).to_numpy(dtype=float)
+
+    mean, std, n = weighted_group_stats(values, weights)
+
+    if n < 2:
+        return None
+
+    return mean, std, n
+
 def weighted_corr(x, y, w):
     mask = x.notna() & y.notna()
     if w is not None:
