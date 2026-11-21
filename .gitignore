@@ -1,6 +1,7 @@
 .streamlit/secrets.toml
 data/
 __pycache__/
+*.py[cod]
 *.pyc
 *.pkl
 .env
