@@ -9,7 +9,7 @@ from ..analytics import (
     fmt_brand_value,
     format_period,
     numeric_values_and_weights,
-    t_test_vs_overall,
+    significant_direction,
     weighted_group_stats,
     weighted_group_stats_from_df,
 )
@@ -173,16 +173,12 @@ def _build_chart(
             if brand_stats is None or others_stats is None:
                 continue
 
-            is_significant, direction, _ = t_test_vs_overall(
-                brand_stats[0],
-                brand_stats[1],
-                brand_stats[2],
-                others_stats[0],
-                others_stats[1],
-                others_stats[2],
+            direction = significant_direction(
+                brand_stats,
+                others_stats,
             )
 
-            if is_significant:
+            if direction is not None:
                 sig_vs_others[brand_key][period_index] = direction
 
     # Значимость динамики бренда между двумя последними периодами.
@@ -214,17 +210,17 @@ def _build_chart(
             sig_directions[brand_key] = None
             continue
 
-        is_significant, direction, _ = t_test_vs_overall(
-            current_mean,
-            current_std,
-            current_n,
-            previous_mean,
-            previous_std,
-            previous_n,
-        )
-
-        sig_directions[brand_key] = (
-            direction if is_significant else None
+        sig_directions[brand_key] = significant_direction(
+            (
+                current_mean,
+                current_std,
+                current_n,
+            ),
+            (
+                previous_mean,
+                previous_std,
+                previous_n,
+            ),
         )
 
     # Настройки высоты и места для подписей и легенды.

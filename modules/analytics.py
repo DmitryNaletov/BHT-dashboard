@@ -120,6 +120,38 @@ def t_test_vs_overall(group_mean, group_std, group_n,
     direction = "up" if group_mean > overall_mean else "down" if group_mean < overall_mean else None
     return is_sig, direction, p
 
+def significant_direction(
+    group_stats,
+    reference_stats,
+    alpha=0.05,
+):
+    """Возвращает направление статистически значимого отличия.
+
+    Параметры group_stats и reference_stats:
+    (среднее, стандартное отклонение, размер базы).
+
+    Возвращает:
+    - "up" — группа значимо выше;
+    - "down" — группа значимо ниже;
+    - None — различие незначимо или недостаточно данных.
+    """
+    if group_stats is None or reference_stats is None:
+        return None
+
+    group_mean, group_std, group_n = group_stats
+    reference_mean, reference_std, reference_n = reference_stats
+
+    is_significant, direction, _ = t_test_vs_overall(
+        group_mean,
+        group_std,
+        group_n,
+        reference_mean,
+        reference_std,
+        reference_n,
+        alpha=alpha,
+    )
+
+    return direction if is_significant else None
 
 # ── Z-тест для долей ───────────────────────────────────────
 
