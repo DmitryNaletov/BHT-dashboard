@@ -81,6 +81,57 @@ def weighted_group_stats_from_df(df, value_col, weight_col):
 
     return mean, std, n
 
+def grouped_period_stats(
+    df,
+    group_col,
+    periods,
+    value_col,
+    weight_col,
+):
+    """Считает статистики групп по периодам.
+
+    Возвращает три словаря:
+    - средние значения;
+    - стандартные отклонения;
+    - размеры баз.
+    """
+    results = {}
+    stds_by_period = {}
+    ns_by_period = {}
+
+    groups = sorted(
+        df[group_col].dropna().unique().tolist(),
+        key=str,
+    )
+
+    for group in groups:
+        group_key = normalize_key(group)
+        group_df = df[df[group_col] == group]
+
+        results[group_key] = []
+        stds_by_period[group_key] = []
+        ns_by_period[group_key] = []
+
+        for period in periods:
+            period_df = group_df[group_df["_period"] == period]
+
+            values, weights = numeric_values_and_weights(
+                period_df,
+                value_col,
+                weight_col,
+            )
+
+            mean, std, n = weighted_group_stats(
+                values,
+                weights,
+            )
+
+            results[group_key].append(mean)
+            stds_by_period[group_key].append(std)
+            ns_by_period[group_key].append(n)
+
+    return results, stds_by_period, ns_by_period
+
 def weighted_corr(x, y, w):
     mask = x.notna() & y.notna()
     if w is not None:

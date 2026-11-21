@@ -10,7 +10,7 @@ from ..analytics import (
     format_period,
     numeric_values_and_weights,
     significant_direction,
-    weighted_group_stats,
+    grouped_period_stats,
     weighted_group_stats_from_df,
 )
 
@@ -115,34 +115,15 @@ def _build_chart(
 
     # Расчёт среднего, стандартного отклонения и базы
     # каждого бренда для каждого периода.
-    results = {}
-    stds_by_period = {}
-    ns_by_period = {}
-
-    for brand in unique_brands:
-        brand_key = _brand_key(brand)
-        brand_df = df_work[df_work[brand_var] == brand]
-
-        results[brand_key] = []
-        stds_by_period[brand_key] = []
-        ns_by_period[brand_key] = []
-
-        for period in all_periods:
-            period_df = brand_df[brand_df["_period"] == period]
-
-            # Подготовка числовых значений и весов
-            # выполняется общей функцией из analytics.py.
-            values, weights = numeric_values_and_weights(
-                period_df,
-                kpi_var,
-                weight_var,
-            )
-
-            mean, std, n = weighted_group_stats(values, weights)
-
-            results[brand_key].append(mean)
-            stds_by_period[brand_key].append(std)
-            ns_by_period[brand_key].append(n)
+    results, stds_by_period, ns_by_period = (
+        grouped_period_stats(
+            df_work,
+            brand_var,
+            all_periods,
+            kpi_var,
+            weight_var,
+        )
+    )
 
     # Значимость сравнения бренда со средним остальных брендов
     # рассчитывается отдельно для каждого периода.
