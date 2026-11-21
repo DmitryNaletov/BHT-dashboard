@@ -8,6 +8,7 @@ import streamlit as st
 from ..analytics import (
     fmt_brand_value,
     format_period,
+    numeric_values_and_weights,
     t_test_vs_overall,
     weighted_group_stats,
     weighted_group_stats_from_df,
@@ -129,14 +130,13 @@ def _build_chart(
         for period in all_periods:
             period_df = brand_df[brand_df["_period"] == period]
 
-            values = pd.to_numeric(
-                period_df[kpi_var],
-                errors="coerce",
-            ).to_numpy(dtype=float)
-            weights = pd.to_numeric(
-                period_df[weight_var],
-                errors="coerce",
-            ).fillna(1).to_numpy(dtype=float)
+            # Подготовка числовых значений и весов
+            # выполняется общей функцией из analytics.py.
+            values, weights = numeric_values_and_weights(
+                period_df,
+                kpi_var,
+                weight_var,
+            )
 
             mean, std, n = weighted_group_stats(values, weights)
 

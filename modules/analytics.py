@@ -14,6 +14,30 @@ def weighted_std(series, weights):
     var = np.average((series - m) ** 2, weights=weights)
     return np.sqrt(var)
 
+def numeric_values_and_weights(
+    df,
+    value_col,
+    weight_col,
+):
+    """Возвращает очищенные массивы значений и положительных весов."""
+    values = pd.to_numeric(
+        df[value_col],
+        errors="coerce",
+    ).to_numpy(dtype=float)
+
+    weights = pd.to_numeric(
+        df[weight_col],
+        errors="coerce",
+    ).fillna(1).to_numpy(dtype=float)
+
+    valid = (
+        np.isfinite(values)
+        & np.isfinite(weights)
+        & (weights > 0)
+    )
+
+    return values[valid], weights[valid]
+
 def weighted_group_stats(values, weights):
     """Возвращает взвешенное среднее, стандартное отклонение и размер базы.
 
@@ -44,15 +68,11 @@ def weighted_group_stats_from_df(df, value_col, weight_col):
 
     Возвращает None, если после очистки осталось меньше двух наблюдений.
     """
-    values = pd.to_numeric(
-        df[value_col],
-        errors="coerce",
-    ).to_numpy(dtype=float)
-
-    weights = pd.to_numeric(
-        df[weight_col],
-        errors="coerce",
-    ).fillna(1).to_numpy(dtype=float)
+    values, weights = numeric_values_and_weights(
+        df,
+        value_col,
+        weight_col,
+    )
 
     mean, std, n = weighted_group_stats(values, weights)
 
