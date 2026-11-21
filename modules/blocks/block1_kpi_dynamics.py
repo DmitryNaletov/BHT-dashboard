@@ -462,18 +462,11 @@ def _build_table(
                 row[period_label] = ""
                 continue
 
-            weights = pd.to_numeric(
-                period_df[weight_var],
-                errors="coerce",
-            ).fillna(1).to_numpy(dtype=float)
-            values = pd.to_numeric(
-                period_df[kpi_var],
-                errors="coerce",
-            ).to_numpy(dtype=float)
-
-            valid = np.isfinite(values) & np.isfinite(weights)
-            values = values[valid]
-            weights = weights[valid]
+            values, weights = numeric_values_and_weights(
+                period_df,
+                kpi_var,
+                weight_var,
+            )
 
             if len(values) and weights.sum() > 0:
                 row[period_label] = (
