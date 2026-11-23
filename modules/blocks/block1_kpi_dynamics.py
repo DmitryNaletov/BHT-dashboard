@@ -10,6 +10,7 @@ from ..analytics import (
     format_period,
     numeric_values_and_weights,
     significant_direction,
+    significance_vs_others_by_period,
     grouped_period_stats,
     weighted_group_stats_from_df,
 )
@@ -125,42 +126,16 @@ def _build_chart(
         )
     )
 
-    # Значимость сравнения бренда со средним остальных брендов
-    # рассчитывается отдельно для каждого периода.
-    sig_vs_others = {
-        _brand_key(brand): [None] * len(all_periods)
-        for brand in unique_brands
-    }
-
-    for period_index, period in enumerate(all_periods):
-        period_data = df_work[df_work["_period"] == period]
-
-        for brand in unique_brands:
-            brand_key = _brand_key(brand)
-            brand_data = period_data[period_data[brand_var] == brand]
-            others_data = period_data[period_data[brand_var] != brand]
-
-            brand_stats = weighted_group_stats_from_df(
-                brand_data,
-                kpi_var,
-                weight_var,
-            )
-            others_stats = weighted_group_stats_from_df(
-                others_data,
-                kpi_var,
-                weight_var,
-            )
-            
-            if brand_stats is None or others_stats is None:
-                continue
-
-            direction = significant_direction(
-                brand_stats,
-                others_stats,
-            )
-
-            if direction is not None:
-                sig_vs_others[brand_key][period_index] = direction
+    # Значимость бренда относительно остальных брендов
+    # внутри каждого периода.
+    sig_vs_others = significance_vs_others_by_period(
+        df_work,
+        brand_var,
+        unique_brands,
+        all_periods,
+        kpi_var,
+        weight_var,
+    )
 
     # Значимость динамики бренда между двумя последними периодами.
     # Она отвечает только за стрелку, не за цвет числа.

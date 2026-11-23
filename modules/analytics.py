@@ -204,8 +204,61 @@ def significant_direction(
 
     return direction if is_significant else None
 
-# ── Z-тест для долей ───────────────────────────────────────
+def significance_vs_others_by_period(
+    df,
+    group_col,
+    groups,
+    periods,
+    value_col,
+    weight_col,
+):
+    """Сравнивает каждую группу со всеми остальными внутри каждого периода.
 
+    Возвращает словарь:
+    {
+        group_key: ["up", None, "down", ...]
+    }
+    """
+    result = {
+        normalize_key(group): [None] * len(periods)
+        for group in groups
+    }
+
+    for period_index, period in enumerate(periods):
+        period_data = df[df["_period"] == period]
+
+        for group in groups:
+            group_key = normalize_key(group)
+
+            group_data = period_data[
+                period_data[group_col] == group
+            ]
+            others_data = period_data[
+                period_data[group_col] != group
+            ]
+
+            group_stats = weighted_group_stats_from_df(
+                group_data,
+                value_col,
+                weight_col,
+            )
+            others_stats = weighted_group_stats_from_df(
+                others_data,
+                value_col,
+                weight_col,
+            )
+
+            result[group_key][period_index] = (
+                significant_direction(
+                    group_stats,
+                    others_stats,
+                )
+            )
+
+    return result
+
+
+# ── Z-тест для долей ───────────────────────────────────────
 def z_test_proportion(p1, n1, p2, n2, alpha=0.05):
     if n1 == 0 or n2 == 0:
         return False, None, 1.0
